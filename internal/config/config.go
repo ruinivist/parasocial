@@ -1,3 +1,6 @@
+// config.go loads and validates the cwd config.toml file for the new CLI.
+// It currently owns streamer list parsing, normalization, and the default
+// config path behavior used by application startup.
 package config
 
 import (
@@ -44,6 +47,7 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// normalizeStreamers deduplicates streamer names after applying input cleanup rules.
 func normalizeStreamers(streamers []string) []string {
 	seen := make(map[string]struct{}, len(streamers))
 	normalized := make([]string, 0, len(streamers))
@@ -63,6 +67,7 @@ func normalizeStreamers(streamers []string) []string {
 	return normalized
 }
 
+// normalizeStreamer trims formatting noise and canonicalizes a single streamer name.
 func normalizeStreamer(streamer string) string {
 	streamer = strings.TrimSpace(streamer)
 	streamer = strings.TrimPrefix(streamer, "#")
