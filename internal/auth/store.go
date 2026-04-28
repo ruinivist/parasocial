@@ -107,8 +107,6 @@ func (s *State) validate() error {
 		return fmt.Errorf("missing client_id")
 	case len(s.Scopes) == 0:
 		return fmt.Errorf("missing scopes")
-	case s.ExpiresIn <= 0:
-		return fmt.Errorf("expires_in must be greater than zero")
 	case s.DeviceID == "":
 		return fmt.Errorf("missing device_id")
 	default:

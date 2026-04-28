@@ -51,6 +51,33 @@ func TestSaveStatePersistsCookieEntries(t *testing.T) {
 	}
 }
 
+func TestSaveStateAllowsZeroExpiresIn(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "cookies.json")
+	state := &State{
+		AccessToken: "token",
+		TokenType:   "bearer",
+		Scopes:      RequiredScopes,
+		Login:       "viewer",
+		UserID:      "123",
+		ClientID:    ClientID,
+		ExpiresIn:   0,
+		DeviceID:    "device",
+	}
+	if err := SaveState(path, state); err != nil {
+		t.Fatalf("SaveState() error = %v", err)
+	}
+
+	loaded, err := LoadState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ExpiresIn != 0 {
+		t.Fatalf("ExpiresIn = %d, want 0", loaded.ExpiresIn)
+	}
+}
+
 func TestLoadStateMissingFileReturnsNil(t *testing.T) {
 	t.Parallel()
 
