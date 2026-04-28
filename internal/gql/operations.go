@@ -67,3 +67,21 @@ func GetIDFromLogin(login string) Request {
 		"login": login,
 	})
 }
+
+// PlaybackAccessToken fetches the HLS playback token Twitch issues for a live channel.
+func PlaybackAccessToken(login string) Request {
+	return operation("PlaybackAccessToken", "3093517e37e4f4cb48906155bcd894150aef92617939236d2508f3375ab732ce", map[string]any{
+		"login":      login,
+		"isLive":     true,
+		"isVod":      false,
+		"vodID":      "",
+		"playerType": "site",
+	})
+}
+
+// WithIsStreamLiveQuery fetches live stream metadata for one channel by ID.
+func WithIsStreamLiveQuery(channelID string) Request {
+	return operation("WithIsStreamLiveQuery", "04e46329a6786ff3a81c01c50bfa5d725902507a0deb83b0edbf7abe7a3716ea", map[string]any{
+		"id": channelID,
+	})
+}

@@ -63,3 +63,64 @@ func TestResolveStreamerNotFound(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestStreamInfoOffline(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeGQL{data: map[string]string{
+		"WithIsStreamLiveQuery": `{"user":{"stream":null}}`,
+	}}
+	service := &Service{GQL: client}
+	info, err := service.StreamInfo(context.Background(), "123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Online {
+		t.Fatalf("info = %#v, want offline", info)
+	}
+}
+
+func TestStreamInfoOnline(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeGQL{data: map[string]string{
+		"WithIsStreamLiveQuery": `{"user":{"stream":{"id":"broadcast"}}}`,
+	}}
+	service := &Service{GQL: client}
+	info, err := service.StreamInfo(context.Background(), "123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Online {
+		t.Fatalf("info = %#v, want online", info)
+	}
+}
+
+func TestPlaybackAccessToken(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeGQL{data: map[string]string{
+		"PlaybackAccessToken": `{"streamPlaybackAccessToken":{"signature":"sig","value":"token"}}`,
+	}}
+	service := &Service{GQL: client}
+	token, err := service.PlaybackAccessToken(context.Background(), "streamer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token.Signature != "sig" || token.Value != "token" {
+		t.Fatalf("token = %#v", token)
+	}
+}
+
+func TestPlaybackAccessTokenMissingFields(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeGQL{data: map[string]string{
+		"PlaybackAccessToken": `{"streamPlaybackAccessToken":{"signature":"sig"}}`,
+	}}
+	service := &Service{GQL: client}
+	_, err := service.PlaybackAccessToken(context.Background(), "streamer")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}

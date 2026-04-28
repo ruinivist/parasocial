@@ -21,6 +21,8 @@ import (
 	"parasocial/internal/twitch"
 )
 
+const streamerRefreshInterval = 5 * time.Minute
+
 // Run loads the application configuration and starts the terminal UI.
 func Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
@@ -97,6 +99,8 @@ func Run(ctx context.Context) error {
 type streamerService interface {
 	CurrentUser(context.Context) (*twitch.Viewer, error)
 	ResolveStreamer(context.Context, string) (*twitch.Channel, error)
+	StreamInfo(context.Context, string) (*twitch.StreamInfo, error)
+	PlaybackAccessToken(context.Context, string) (*twitch.PlaybackToken, error)
 }
 
 // newTwitchService builds a Twitch service from the authenticated session state.
@@ -118,36 +122,82 @@ func newTwitchService(httpClient *http.Client, state *auth.State) (*twitch.Servi
 
 // resolveStreamerEntries streams viewer and streamer resolution results into the TUI.
 func resolveStreamerEntries(ctx context.Context, service streamerService, logins []string, send func(tui.StreamerUpdate)) error {
+	return resolveStreamerEntriesWithSleep(ctx, service, logins, send, streamerRefreshInterval, sleepContext)
+}
+
+func resolveStreamerEntriesWithSleep(ctx context.Context, service streamerService, logins []string, send func(tui.StreamerUpdate), interval time.Duration, sleep func(context.Context, time.Duration) error) error {
 	viewer, err := service.CurrentUser(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve current user: %w", err)
 	}
 	send(tui.StreamerUpdate{Viewer: viewer})
 
-	for index, login := range logins {
-		entry := twitch.StreamerEntry{
-			ConfigLogin: login,
-			Status:      twitch.StreamerLoading,
+	for {
+		for index, login := range logins {
+			entry, err := resolveStreamerEntry(ctx, service, login)
+			if errors.Is(err, context.Canceled) {
+				return err
+			}
+			send(tui.StreamerUpdate{
+				Index: index,
+				Entry: entry,
+			})
 		}
-
-		channel, err := service.ResolveStreamer(ctx, login)
-		switch {
-		case err == nil:
-			entry.Login = channel.Login
-			entry.ChannelID = channel.ID
-			entry.Status = twitch.StreamerReady
-		case errors.Is(err, context.Canceled):
+		if err := sleep(ctx, interval); err != nil {
 			return err
-		default:
-			entry.Status = twitch.StreamerError
-			entry.Error = err.Error()
 		}
+	}
+}
 
-		send(tui.StreamerUpdate{
-			Index: index,
-			Entry: &entry,
-		})
+func resolveStreamerEntry(ctx context.Context, service streamerService, login string) (*twitch.StreamerEntry, error) {
+	entry := &twitch.StreamerEntry{
+		ConfigLogin: login,
+		Status:      twitch.StreamerLoading,
 	}
 
-	return nil
+	channel, err := service.ResolveStreamer(ctx, login)
+	switch {
+	case err == nil:
+		entry.Login = channel.Login
+		entry.ChannelID = channel.ID
+	case errors.Is(err, context.Canceled):
+		return nil, err
+	default:
+		entry.Status = twitch.StreamerError
+		entry.Error = err.Error()
+		return entry, nil
+	}
+
+	stream, err := service.StreamInfo(ctx, channel.ID)
+	switch {
+	case err == nil:
+		entry.Status = twitch.StreamerReady
+		entry.Live = stream.Online
+	case errors.Is(err, context.Canceled):
+		return nil, err
+	default:
+		entry.Status = twitch.StreamerError
+		entry.Error = err.Error()
+		return entry, nil
+	}
+
+	if !entry.Live {
+		return entry, nil
+	}
+	if _, err := service.PlaybackAccessToken(ctx, channel.Login); err != nil && errors.Is(err, context.Canceled) {
+		return nil, err
+	}
+	return entry, nil
+}
+
+func sleepContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

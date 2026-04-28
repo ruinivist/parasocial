@@ -14,6 +14,8 @@ import (
 	"parasocial/internal/twitch"
 )
 
+const liveDot = "\x1b[32m●\x1b[0m"
+
 type viewMode int
 
 const (
@@ -195,7 +197,11 @@ func (m Model) View() string {
 	for i, streamer := range m.streamers {
 		switch streamer.Status {
 		case twitch.StreamerReady:
-			fmt.Fprintf(&builder, "%d. %s (%s)\n", i+1, streamer.Login, streamer.ChannelID)
+			label := streamer.Login
+			if streamer.Live {
+				label += " " + liveDot
+			}
+			fmt.Fprintf(&builder, "%d. %s (%s)\n", i+1, label, streamer.ChannelID)
 		case twitch.StreamerError:
 			fmt.Fprintf(&builder, "%d. %s [error: %s]\n", i+1, streamer.ConfigLogin, streamer.Error)
 		default:

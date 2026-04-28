@@ -10,7 +10,7 @@ import (
 func TestViewDisplaysStreamers(t *testing.T) {
 	model := New(Options{
 		Streamers: []twitch.StreamerEntry{
-			{ConfigLogin: "alpha", Login: "alpha_live", ChannelID: "1", Status: twitch.StreamerReady},
+			{ConfigLogin: "alpha", Login: "alpha_live", ChannelID: "1", Live: true, Status: twitch.StreamerReady},
 			{ConfigLogin: "beta", Status: twitch.StreamerLoading},
 		},
 	})
@@ -18,7 +18,7 @@ func TestViewDisplaysStreamers(t *testing.T) {
 	model.viewer = &twitch.Viewer{ID: "7", Login: "viewer"}
 
 	got := model.View()
-	want := "Logged in as viewer (7)\n\nStreamers\n1. alpha_live (1)\n2. beta [loading]\n\n"
+	want := "Logged in as viewer (7)\n\nStreamers\n1. alpha_live \x1b[32m●\x1b[0m (1)\n2. beta [loading]\n\n"
 	if got != want {
 		t.Fatalf("View() = %q, want %q", got, want)
 	}
@@ -112,6 +112,7 @@ func TestStreamerUpdateAppliesEntry(t *testing.T) {
 			ConfigLogin: "alpha",
 			Login:       "alpha_live",
 			ChannelID:   "1",
+			Live:        true,
 			Status:      twitch.StreamerReady,
 		},
 	})
@@ -121,6 +122,22 @@ func TestStreamerUpdateAppliesEntry(t *testing.T) {
 
 	next := updated.(Model)
 	got := next.View()
+	want := "Logged in as viewer (7)\n\nStreamers\n1. alpha_live \x1b[32m●\x1b[0m (1)\n\n"
+	if got != want {
+		t.Fatalf("View() = %q, want %q", got, want)
+	}
+}
+
+func TestViewDisplaysOfflineReadyStreamerWithoutMarker(t *testing.T) {
+	model := New(Options{
+		Streamers: []twitch.StreamerEntry{
+			{ConfigLogin: "alpha", Login: "alpha_live", ChannelID: "1", Status: twitch.StreamerReady},
+		},
+	})
+	model.mode = streamerView
+	model.viewer = &twitch.Viewer{ID: "7", Login: "viewer"}
+
+	got := model.View()
 	want := "Logged in as viewer (7)\n\nStreamers\n1. alpha_live (1)\n\n"
 	if got != want {
 		t.Fatalf("View() = %q, want %q", got, want)
