@@ -14,13 +14,23 @@ import (
 	"parasocial/internal/twitch"
 )
 
-const liveDot = "\x1b[32m●\x1b[0m"
+const defaultViewWidth = 80
+const greenDot = "\x1b[32m●\x1b[0m"
 
 type viewMode int
 
 const (
 	authView viewMode = iota
 	streamerView
+)
+
+// IRCState describes the current IRC join lifecycle for one streamer row.
+type IRCState string
+
+const (
+	IRCPending      IRCState = "pending"
+	IRCJoined       IRCState = "joined"
+	IRCDisconnected IRCState = "disconnected"
 )
 
 // StartAuthFunc begins the asynchronous Twitch login flow for the model.
@@ -41,9 +51,17 @@ type AuthUpdate struct {
 type StreamerUpdate struct {
 	Viewer *twitch.Viewer
 	Entry  *twitch.StreamerEntry
+	IRC    *IRCUpdate
 	Index  int
 	Err    error
 	Done   bool
+}
+
+// IRCUpdate carries one IRC connection state or log line into the TUI.
+type IRCUpdate struct {
+	Login string
+	State IRCState
+	Line  string
 }
 
 // Options configures the initial streamer list, auth state, and worker starter hooks.
@@ -77,6 +95,19 @@ type Model struct {
 	resolveErr      error
 	viewer          *twitch.Viewer
 	mode            viewMode
+	width           int
+	height          int
+	selectedConfig  string
+	ircDetails      map[string]ircDetail
+}
+
+type ircDetail struct {
+	joined bool
+}
+
+type streamerRow struct {
+	index int
+	entry twitch.StreamerEntry
 }
 
 // New returns a Bubble Tea model for auth and streamer display.
@@ -88,10 +119,12 @@ func New(options Options) Model {
 		startResolve: options.StartResolve,
 		authLogs:     []string{},
 		mode:         authView,
+		ircDetails:   make(map[string]ircDetail),
 	}
 	if options.AuthState != nil {
 		model.mode = streamerView
 	}
+	model.ensureSelection()
 	return model
 }
 
@@ -128,6 +161,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewer = nil
 				m.resolveErr = nil
 				m.streamers = loadingEntries(m.streamers)
+				m.ircDetails = make(map[string]ircDetail)
+				m.selectedConfig = ""
+				m.ensureSelection()
 				return m, startStreamerResolution(m.startResolve, m.authState)
 			}
 			return m, nil
@@ -143,17 +179,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Entry != nil && msg.Index >= 0 && msg.Index < len(m.streamers) {
 			m.streamers[msg.Index] = *msg.Entry
 		}
+		if msg.IRC != nil {
+			m.applyIRCUpdate(*msg.IRC)
+		}
 		if msg.Err != nil {
 			m.resolveErr = msg.Err
 		}
+		m.ensureSelection()
 		if msg.Done {
 			return m, nil
 		}
 		if m.streamerUpdates != nil {
 			return m, waitForStreamerUpdate(m.streamerUpdates)
 		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.ensureSelection()
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "up", "k":
+			if m.mode == streamerView {
+				m.moveSelection(-1)
+			}
+		case "down", "j":
+			if m.mode == streamerView {
+				m.moveSelection(1)
+			}
 		case "ctrl+c", "esc", "q":
 			return m, tea.Quit
 		}
@@ -164,8 +216,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders either the login log screen or the authenticated streamer list.
 func (m Model) View() string {
-	var builder strings.Builder
 	if m.mode == authView {
+		var builder strings.Builder
 		builder.WriteString("Twitch Login\n")
 		if len(m.authLogs) == 0 {
 			builder.WriteString("Starting authentication...\n")
@@ -182,34 +234,315 @@ func (m Model) View() string {
 		return builder.String()
 	}
 
+	return m.renderStreamerView()
+}
+
+func (m Model) renderStreamerView() string {
+	var builder strings.Builder
 	switch {
 	case m.viewer != nil:
-		fmt.Fprintf(&builder, "Logged in as %s (%s)\n\n", m.viewer.Login, m.viewer.ID)
+		fmt.Fprintf(&builder, "Logged in as %s (%s)\n", m.viewer.Login, m.viewer.ID)
 	case m.authState != nil && m.authState.Login != "":
 		fmt.Fprintf(&builder, "Logged in as %s\n", m.authState.Login)
 		if m.resolveErr != nil {
-			fmt.Fprintf(&builder, "Viewer lookup failed: %v\n\n", m.resolveErr)
+			fmt.Fprintf(&builder, "Viewer lookup failed: %v\n", m.resolveErr)
 		} else {
-			builder.WriteString("Resolving viewer identity...\n\n")
+			builder.WriteString("Resolving viewer identity...\n")
 		}
 	}
-	builder.WriteString("Streamers\n")
-	for i, streamer := range m.streamers {
-		switch streamer.Status {
-		case twitch.StreamerReady:
-			label := streamer.Login
-			if streamer.Live {
-				label += " " + liveDot
-			}
-			fmt.Fprintf(&builder, "%d. %s (%s)\n", i+1, label, streamer.ChannelID)
-		case twitch.StreamerError:
-			fmt.Fprintf(&builder, "%d. %s [error: %s]\n", i+1, streamer.ConfigLogin, streamer.Error)
-		default:
-			fmt.Fprintf(&builder, "%d. %s [loading]\n", i+1, streamer.ConfigLogin)
+	fmt.Fprintf(&builder, "Watching: %s\n", watchingSummary(m.streamers))
+
+	rows := m.orderedRows()
+	selectedIndex := m.selectedRowIndex(rows)
+	leftPane := m.leftPaneLines(rows)
+	rightPane := m.rightPaneLines(rows, selectedIndex)
+
+	if m.height > 0 {
+		available := m.height - 3
+		if available > 0 {
+			leftPane = clipListLines(leftPane, available, selectedIndex+1)
+			rightPane = clipTailLines(rightPane, available)
 		}
 	}
+
+	bodyWidth := m.width
+	if bodyWidth <= 0 {
+		bodyWidth = defaultViewWidth
+	}
+
 	builder.WriteString("\n")
+	for _, line := range renderColumns(leftPane, rightPane, bodyWidth) {
+		builder.WriteString(line)
+		builder.WriteByte('\n')
+	}
+	builder.WriteByte('\n')
 	return builder.String()
+}
+
+func watchingSummary(streamers []twitch.StreamerEntry) string {
+	live := make([]string, 0, 2)
+	for _, streamer := range streamers {
+		if streamer.Status != twitch.StreamerReady || !streamer.Live {
+			continue
+		}
+		name := streamer.Login
+		if name == "" {
+			name = streamer.ConfigLogin
+		}
+		live = append(live, name)
+		if len(live) == 2 {
+			break
+		}
+	}
+	if len(live) == 0 {
+		return "no live streamers"
+	}
+	return strings.Join(live, ", ")
+}
+
+func (m *Model) applyIRCUpdate(update IRCUpdate) {
+	login := normalizeKey(update.Login)
+	if login == "" {
+		return
+	}
+
+	detail := m.ircDetails[login]
+	switch update.State {
+	case IRCJoined:
+		detail.joined = true
+	case IRCPending, IRCDisconnected:
+		detail.joined = false
+	}
+	if update.Line != "" {
+	}
+	m.ircDetails[login] = detail
+}
+
+func (m *Model) ensureSelection() {
+	rows := m.orderedRows()
+	if len(rows) == 0 {
+		m.selectedConfig = ""
+		return
+	}
+	if m.selectedConfig == "" {
+		m.selectedConfig = rows[0].entry.ConfigLogin
+		return
+	}
+	for _, row := range rows {
+		if row.entry.ConfigLogin == m.selectedConfig {
+			return
+		}
+	}
+	m.selectedConfig = rows[0].entry.ConfigLogin
+}
+
+func (m *Model) moveSelection(delta int) {
+	rows := m.orderedRows()
+	if len(rows) == 0 {
+		m.selectedConfig = ""
+		return
+	}
+	m.ensureSelection()
+
+	selected := m.selectedRowIndex(rows)
+	if selected < 0 {
+		selected = 0
+	}
+	selected += delta
+	if selected < 0 {
+		selected = 0
+	}
+	if selected >= len(rows) {
+		selected = len(rows) - 1
+	}
+	m.selectedConfig = rows[selected].entry.ConfigLogin
+}
+
+func (m Model) orderedRows() []streamerRow {
+	rows := make([]streamerRow, 0, len(m.streamers))
+	for index, entry := range m.streamers {
+		if isActive(entry) {
+			rows = append(rows, streamerRow{index: index, entry: entry})
+		}
+	}
+	for index, entry := range m.streamers {
+		if isActive(entry) {
+			continue
+		}
+		rows = append(rows, streamerRow{index: index, entry: entry})
+	}
+	return rows
+}
+
+func (m Model) selectedRowIndex(rows []streamerRow) int {
+	for index, row := range rows {
+		if row.entry.ConfigLogin == m.selectedConfig {
+			return index
+		}
+	}
+	if len(rows) == 0 {
+		return -1
+	}
+	return 0
+}
+
+func (m Model) leftPaneLines(rows []streamerRow) []string {
+	lines := []string{"Streamers"}
+	for _, row := range rows {
+		prefix := "  "
+		if row.entry.ConfigLogin == m.selectedConfig {
+			prefix = "> "
+		}
+
+		status := "inactive"
+		if isActive(row.entry) {
+			status = "active"
+		}
+		lines = append(lines, prefix+streamerName(row.entry)+" ["+status+"]")
+	}
+	if len(rows) == 0 {
+		lines = append(lines, "  none")
+	}
+	return lines
+}
+
+func (m Model) rightPaneLines(rows []streamerRow, selected int) []string {
+	lines := []string{"IRC Chat"}
+	if selected < 0 || selected >= len(rows) {
+		return append(lines, "")
+	}
+
+	row := rows[selected].entry
+	if !isActive(row) {
+		return append(lines, "inactive")
+	}
+
+	detail := m.ircDetails[normalizeKey(row.Login)]
+	if !detail.joined {
+		return append(lines, "not joined")
+	}
+	return append(lines, greenDot)
+}
+
+func isActive(entry twitch.StreamerEntry) bool {
+	return entry.Status == twitch.StreamerReady && entry.Live
+}
+
+func streamerName(entry twitch.StreamerEntry) string {
+	if entry.Login != "" {
+		return entry.Login
+	}
+	return entry.ConfigLogin
+}
+
+func normalizeKey(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func renderColumns(left, right []string, totalWidth int) []string {
+	if totalWidth <= 0 {
+		totalWidth = defaultViewWidth
+	}
+
+	leftWidth, rightWidth := splitWidths(totalWidth)
+	height := len(left)
+	if len(right) > height {
+		height = len(right)
+	}
+
+	lines := make([]string, 0, height)
+	for index := 0; index < height; index++ {
+		leftLine := ""
+		if index < len(left) {
+			leftLine = left[index]
+		}
+		rightLine := ""
+		if index < len(right) {
+			rightLine = right[index]
+		}
+		lines = append(lines, fitWidth(leftLine, leftWidth)+" │ "+fitWidth(rightLine, rightWidth))
+	}
+	return lines
+}
+
+func splitWidths(totalWidth int) (int, int) {
+	if totalWidth < 8 {
+		return max(1, totalWidth-4), 1
+	}
+
+	leftWidth := totalWidth / 3
+	if leftWidth < 20 {
+		leftWidth = 20
+	}
+	if leftWidth > 32 {
+		leftWidth = 32
+	}
+
+	rightWidth := totalWidth - leftWidth - 3
+	if rightWidth < 8 {
+		rightWidth = 8
+		leftWidth = totalWidth - rightWidth - 3
+		if leftWidth < 1 {
+			leftWidth = 1
+			rightWidth = max(1, totalWidth-leftWidth-3)
+		}
+	}
+	return leftWidth, rightWidth
+}
+
+func fitWidth(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+
+	runes := []rune(value)
+	if len(runes) > width {
+		return string(runes[:width])
+	}
+	return value + strings.Repeat(" ", width-len(runes))
+}
+
+func clipListLines(lines []string, height, selectedLine int) []string {
+	if height <= 0 || len(lines) <= height {
+		return lines
+	}
+	if height == 1 {
+		return lines[:1]
+	}
+
+	rows := lines[1:]
+	visibleRows := height - 1
+	selectedRow := selectedLine - 1
+	if selectedRow < 0 {
+		selectedRow = 0
+	}
+	start := 0
+	if selectedRow >= visibleRows {
+		start = selectedRow - visibleRows + 1
+	}
+	if start+visibleRows > len(rows) {
+		start = len(rows) - visibleRows
+	}
+	if start < 0 {
+		start = 0
+	}
+	return append([]string{lines[0]}, rows[start:start+visibleRows]...)
+}
+
+func clipTailLines(lines []string, height int) []string {
+	if height <= 0 || len(lines) <= height {
+		return lines
+	}
+	if height == 1 {
+		return lines[:1]
+	}
+
+	body := lines[1:]
+	visibleRows := height - 1
+	if len(body) > visibleRows {
+		body = body[len(body)-visibleRows:]
+	}
+	return append([]string{lines[0]}, body...)
 }
 
 // startAuthSession starts the background auth worker and returns its update channel to Bubble Tea.

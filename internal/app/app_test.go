@@ -6,9 +6,12 @@ package app
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
+	"parasocial/internal/auth"
+	"parasocial/internal/irc"
 	"parasocial/internal/tui"
 	"parasocial/internal/twitch"
 )
@@ -73,6 +76,18 @@ func (f *fakeStreamerService) PlaybackAccessToken(_ context.Context, login strin
 	return &twitch.PlaybackToken{Signature: "sig", Value: "token"}, nil
 }
 
+type fakeIRCSyncer struct {
+	calls [][]string
+}
+
+func (f *fakeIRCSyncer) Sync(_ context.Context, _, _ string, targets []irc.Target) {
+	logins := make([]string, 0, len(targets))
+	for _, target := range targets {
+		logins = append(logins, target.Login)
+	}
+	f.calls = append(f.calls, logins)
+}
+
 // TestResolveStreamerEntries verifies that app resolution emits viewer, success, and error updates.
 func TestResolveStreamerEntries(t *testing.T) {
 	t.Parallel()
@@ -91,7 +106,7 @@ func TestResolveStreamerEntries(t *testing.T) {
 	}
 
 	var updates []tui.StreamerUpdate
-	err := resolveStreamerEntriesWithSleep(context.Background(), service, []string{"alpha", "beta"}, func(update tui.StreamerUpdate) {
+	err := resolveStreamerEntriesWithSleep(context.Background(), service, &auth.State{Login: "viewer", AccessToken: "token"}, []string{"alpha", "beta"}, nil, func(update tui.StreamerUpdate) {
 		updates = append(updates, update)
 	}, 0, func(context.Context, time.Duration) error {
 		return context.Canceled
@@ -130,7 +145,7 @@ func TestResolveStreamerEntriesPlaybackFailureStillMarksLive(t *testing.T) {
 	}
 
 	var updates []tui.StreamerUpdate
-	err := resolveStreamerEntriesWithSleep(context.Background(), service, []string{"alpha"}, func(update tui.StreamerUpdate) {
+	err := resolveStreamerEntriesWithSleep(context.Background(), service, &auth.State{Login: "viewer", AccessToken: "token"}, []string{"alpha"}, nil, func(update tui.StreamerUpdate) {
 		updates = append(updates, update)
 	}, 0, func(context.Context, time.Duration) error {
 		return context.Canceled
@@ -165,7 +180,7 @@ func TestResolveStreamerEntriesRefreshesLiveState(t *testing.T) {
 
 	var updates []tui.StreamerUpdate
 	sleepCalls := 0
-	err := resolveStreamerEntriesWithSleep(context.Background(), service, []string{"alpha"}, func(update tui.StreamerUpdate) {
+	err := resolveStreamerEntriesWithSleep(context.Background(), service, &auth.State{Login: "viewer", AccessToken: "token"}, []string{"alpha"}, nil, func(update tui.StreamerUpdate) {
 		updates = append(updates, update)
 	}, 0, func(context.Context, time.Duration) error {
 		sleepCalls++
@@ -185,5 +200,89 @@ func TestResolveStreamerEntriesRefreshesLiveState(t *testing.T) {
 	}
 	if updates[2].Entry == nil || !updates[2].Entry.Live {
 		t.Fatalf("second pass = %#v", updates[2])
+	}
+}
+
+func TestResolveStreamerEntriesSyncsTopTwoLiveChannels(t *testing.T) {
+	t.Parallel()
+
+	service := &fakeStreamerService{
+		viewer: &twitch.Viewer{ID: "7", Login: "viewer"},
+		channels: map[string]*twitch.Channel{
+			"alpha": {ID: "1", Login: "alpha_live"},
+			"beta":  {ID: "2", Login: "beta_live"},
+			"gamma": {ID: "3", Login: "gamma_live"},
+		},
+		streams: map[string][]streamResult{
+			"1": {{info: &twitch.StreamInfo{Online: true}}},
+			"2": {{info: &twitch.StreamInfo{Online: true}}},
+			"3": {{info: &twitch.StreamInfo{Online: true}}},
+		},
+	}
+	syncer := &fakeIRCSyncer{}
+
+	err := resolveStreamerEntriesWithSleep(context.Background(), service, &auth.State{Login: "viewer", AccessToken: "token"}, []string{"alpha", "beta", "gamma"}, syncer, func(tui.StreamerUpdate) {
+	}, 0, func(context.Context, time.Duration) error {
+		return context.Canceled
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+
+	want := [][]string{
+		{},
+		{"alpha_live"},
+		{"alpha_live", "beta_live"},
+		{"alpha_live", "beta_live"},
+	}
+	if !reflect.DeepEqual(syncer.calls, want) {
+		t.Fatalf("sync calls = %#v, want %#v", syncer.calls, want)
+	}
+}
+
+func TestResolveStreamerEntriesRefreshUpdatesWatchedChannels(t *testing.T) {
+	t.Parallel()
+
+	service := &fakeStreamerService{
+		viewer: &twitch.Viewer{ID: "7", Login: "viewer"},
+		channels: map[string]*twitch.Channel{
+			"alpha": {ID: "1", Login: "alpha_live"},
+			"beta":  {ID: "2", Login: "beta_live"},
+		},
+		streams: map[string][]streamResult{
+			"1": {
+				{info: &twitch.StreamInfo{Online: true}},
+				{info: &twitch.StreamInfo{Online: false}},
+			},
+			"2": {
+				{info: &twitch.StreamInfo{Online: false}},
+				{info: &twitch.StreamInfo{Online: true}},
+			},
+		},
+	}
+	syncer := &fakeIRCSyncer{}
+
+	sleepCalls := 0
+	err := resolveStreamerEntriesWithSleep(context.Background(), service, &auth.State{Login: "viewer", AccessToken: "token"}, []string{"alpha", "beta"}, syncer, func(tui.StreamerUpdate) {
+	}, 0, func(context.Context, time.Duration) error {
+		sleepCalls++
+		if sleepCalls == 1 {
+			return nil
+		}
+		return context.Canceled
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+
+	want := [][]string{
+		{},
+		{"alpha_live"},
+		{"alpha_live"},
+		{},
+		{"beta_live"},
+	}
+	if !reflect.DeepEqual(syncer.calls, want) {
+		t.Fatalf("sync calls = %#v, want %#v", syncer.calls, want)
 	}
 }
