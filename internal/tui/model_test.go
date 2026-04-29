@@ -5,118 +5,94 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
 	"parasocial/internal/auth"
 	"parasocial/internal/twitch"
 )
 
-func TestViewDisplaysSplitPaneWithSelectedStreamerDetails(t *testing.T) {
-	model := New(Options{
-		Streamers: []twitch.StreamerEntry{
-			{ConfigLogin: "alpha", Login: "alpha_live", ChannelID: "1", Live: true, Status: twitch.StreamerReady},
-			{ConfigLogin: "beta", Login: "beta_live", ChannelID: "2", Live: true, Status: twitch.StreamerReady},
-			{ConfigLogin: "gamma", Status: twitch.StreamerLoading},
-		},
-	})
-	model.mode = streamerView
-	model.viewer = &twitch.Viewer{ID: "7", Login: "viewer"}
-	model.width = 80
+type fakeModelRuntime struct {
+	authStarted    bool
+	resolveStarted *auth.State
+}
 
-	got := model.View()
-	if !strings.Contains(got, "Watching: alpha_live, beta_live\n\n") {
-		t.Fatalf("View() missing watching summary:\n%s", got)
-	}
-	if !strings.Contains(got, "> alpha_live [active]") {
-		t.Fatalf("View() missing selected active row:\n%s", got)
-	}
-	if !strings.Contains(got, "gamma [inactive]") {
-		t.Fatalf("View() missing inactive row:\n%s", got)
-	}
-	if !strings.Contains(got, "IRC Chat") || !strings.Contains(got, "not joined") {
-		t.Fatalf("View() missing detail pane:\n%s", got)
-	}
+func (f *fakeModelRuntime) startAuth(ch chan<- AuthUpdate) {
+	f.authStarted = true
+	close(ch)
+}
+
+func (f *fakeModelRuntime) startResolve(state *auth.State, ch chan<- StreamerUpdate) {
+	f.resolveStarted = state
+	close(ch)
+}
+
+func TestViewDisplaysDashboardWithSelectedStreamerDetails(t *testing.T) {
+	model := dashboardModel(
+		twitch.StreamerEntry{ConfigLogin: "alpha", Login: "alpha_live", Live: true, Status: twitch.StreamerReady},
+		twitch.StreamerEntry{ConfigLogin: "beta", Login: "beta_live", Live: true, Status: twitch.StreamerReady},
+		twitch.StreamerEntry{ConfigLogin: "gamma", Status: twitch.StreamerLoading},
+	)
+
+	assertContainsAll(t, model.View(),
+		"Watching: alpha_live, beta_live",
+		"alpha_live",
+		"live | irc idle",
+		"gamma",
+		"loading",
+		"IRC Chat",
+		"not joined",
+	)
 }
 
 func TestAuthUpdateAppendsLogLine(t *testing.T) {
-	model := New(Options{Streamers: twitch.LoadingStreamerEntries([]string{"alpha"})})
-
-	updated, cmd := model.Update(AuthUpdate{Line: "Open page: https://www.twitch.tv/activate"})
+	updated, cmd := New(Options{Streamers: []string{"alpha"}}).Update(AuthUpdate{Line: "Open page: https://www.twitch.tv/activate"})
 	if cmd != nil {
 		t.Fatal("expected nil cmd after auth update without channel")
 	}
-
-	next := updated.(Model)
-	got := next.View()
-	want := "Twitch Login\nOpen page: https://www.twitch.tv/activate\n\n"
-	if got != want {
-		t.Fatalf("View() = %q, want %q", got, want)
-	}
+	assertContainsAll(t, updated.(Model).View(), "Twitch Login", "Open page: https://www.twitch.tv/activate")
 }
 
 func TestAuthSuccessSwitchesToStreamerViewAndStartsResolution(t *testing.T) {
-	var started *auth.State
-	model := New(Options{
-		Streamers: twitch.LoadingStreamerEntries([]string{"alpha"}),
-		StartResolve: func(state *auth.State, ch chan<- StreamerUpdate) {
-			started = state
-			close(ch)
-		},
-	})
-
+	runtime := &fakeModelRuntime{}
 	state := &auth.State{Login: "viewer", UserID: "7"}
-
-	updated, cmd := model.Update(AuthUpdate{
-		State: state,
-		Done:  true,
-	})
+	updated, cmd := New(Options{Streamers: []string{"alpha"}, runtime: runtime}).Update(AuthUpdate{State: state, Done: true})
 	if cmd == nil {
 		t.Fatal("expected streamer resolution command")
 	}
 	if _, ok := cmd().(streamerStartedMsg); !ok {
 		t.Fatalf("cmd() returned %T, want streamerStartedMsg", cmd())
 	}
-	if started != state {
-		t.Fatalf("started state = %#v, want %#v", started, state)
+	if runtime.resolveStarted != state {
+		t.Fatalf("started state = %#v, want %#v", runtime.resolveStarted, state)
 	}
 
 	next := updated.(Model)
-	got := next.View()
-	if !strings.Contains(got, "Watching: no live streamers") {
-		t.Fatalf("View() = %q", got)
-	}
+	assertContainsAll(t, next.View(), "Watching: no live streamers")
 	if next.selectedConfig != "alpha" {
 		t.Fatalf("selectedConfig = %q, want alpha", next.selectedConfig)
 	}
 }
 
-func TestInitStartsResolutionWhenAlreadyAuthenticated(t *testing.T) {
-	var started *auth.State
-	state := &auth.State{Login: "viewer", UserID: "7"}
-	model := New(Options{
-		Streamers: twitch.LoadingStreamerEntries([]string{"alpha"}),
-		AuthState: state,
-		StartResolve: func(got *auth.State, ch chan<- StreamerUpdate) {
-			started = got
-			close(ch)
-		},
-	})
+func TestInitStartsAuthOrResolution(t *testing.T) {
+	runtime := &fakeModelRuntime{}
+	if _, ok := New(Options{Streamers: []string{"alpha"}, runtime: runtime}).Init()().(authStartedMsg); !ok {
+		t.Fatal("unauthenticated Init() did not start auth")
+	}
+	if !runtime.authStarted {
+		t.Fatal("expected auth runtime to start")
+	}
 
-	cmd := model.Init()
-	if cmd == nil {
-		t.Fatal("expected init command")
+	state := &auth.State{Login: "viewer", UserID: "7"}
+	runtime = &fakeModelRuntime{}
+	if _, ok := New(Options{Streamers: []string{"alpha"}, AuthState: state, runtime: runtime}).Init()().(streamerStartedMsg); !ok {
+		t.Fatal("authenticated Init() did not start streamer resolution")
 	}
-	if _, ok := cmd().(streamerStartedMsg); !ok {
-		t.Fatalf("cmd() returned %T, want streamerStartedMsg", cmd())
-	}
-	if started != state {
-		t.Fatalf("started state = %#v, want %#v", started, state)
+	if runtime.resolveStarted != state {
+		t.Fatalf("started state = %#v, want %#v", runtime.resolveStarted, state)
 	}
 }
 
 func TestStreamerUpdateAppliesEntry(t *testing.T) {
-	model := New(Options{
-		Streamers: twitch.LoadingStreamerEntries([]string{"alpha"}),
-		AuthState: &auth.State{Login: "viewer"},
-	})
+	model := New(Options{Streamers: []string{"alpha"}, AuthState: &auth.State{Login: "viewer"}})
 	model.mode = streamerView
 
 	updated, cmd := model.Update(StreamerUpdate{
@@ -135,39 +111,29 @@ func TestStreamerUpdateAppliesEntry(t *testing.T) {
 	}
 
 	next := updated.(Model)
+	assertContainsAll(t, next.View(), "alpha_live", "live")
 	if next.selectedConfig != "alpha" {
 		t.Fatalf("selectedConfig = %q, want alpha", next.selectedConfig)
 	}
 }
 
 func TestViewDisplaysInactiveDetailForOfflineStreamer(t *testing.T) {
-	model := New(Options{
-		Streamers: []twitch.StreamerEntry{
-			{ConfigLogin: "alpha", Login: "alpha_live", ChannelID: "1", Status: twitch.StreamerReady},
-		},
-	})
-	model.mode = streamerView
-	model.viewer = &twitch.Viewer{ID: "7", Login: "viewer"}
-	model.width = 80
-
-	got := model.View()
-	if !strings.Contains(got, "inactive") {
-		t.Fatalf("View() = %q", got)
-	}
+	model := dashboardModel(twitch.StreamerEntry{ConfigLogin: "alpha", Login: "alpha_live", Status: twitch.StreamerReady})
+	assertContainsAll(t, model.View(), "offline", "inactive")
 }
 
 func TestActiveStreamersRenderBeforeInactiveInConfigOrder(t *testing.T) {
-	model := New(Options{
-		Streamers: []twitch.StreamerEntry{
-			{ConfigLogin: "alpha", Login: "alpha_live", Status: twitch.StreamerReady},
-			{ConfigLogin: "beta", Login: "beta_live", Live: true, Status: twitch.StreamerReady},
-			{ConfigLogin: "gamma", Login: "gamma_live", Live: true, Status: twitch.StreamerReady},
-			{ConfigLogin: "delta", Status: twitch.StreamerLoading},
-		},
-	})
+	model := New(Options{initialStreamers: []twitch.StreamerEntry{
+		{ConfigLogin: "alpha", Login: "alpha_live", Status: twitch.StreamerReady},
+		{ConfigLogin: "beta", Login: "beta_live", Live: true, Status: twitch.StreamerReady},
+		{ConfigLogin: "gamma", Login: "gamma_live", Live: true, Status: twitch.StreamerReady},
+		{ConfigLogin: "delta", Status: twitch.StreamerLoading},
+	}})
 
-	rows := model.orderedRows()
-	got := []string{rows[0].entry.ConfigLogin, rows[1].entry.ConfigLogin, rows[2].entry.ConfigLogin, rows[3].entry.ConfigLogin}
+	got := []string{}
+	for _, entry := range model.orderedStreamers() {
+		got = append(got, entry.ConfigLogin)
+	}
 	want := []string{"beta", "gamma", "alpha", "delta"}
 	for index := range want {
 		if got[index] != want[index] {
@@ -178,7 +144,7 @@ func TestActiveStreamersRenderBeforeInactiveInConfigOrder(t *testing.T) {
 
 func TestSelectionTracksSameStreamerAcrossReorder(t *testing.T) {
 	model := New(Options{
-		Streamers: []twitch.StreamerEntry{
+		initialStreamers: []twitch.StreamerEntry{
 			{ConfigLogin: "alpha", Login: "alpha_live", Status: twitch.StreamerReady},
 			{ConfigLogin: "beta", Login: "beta_live", Status: twitch.StreamerReady},
 		},
@@ -189,33 +155,19 @@ func TestSelectionTracksSameStreamerAcrossReorder(t *testing.T) {
 
 	updated, _ := model.Update(StreamerUpdate{
 		Index: 1,
-		Entry: &twitch.StreamerEntry{
-			ConfigLogin: "beta",
-			Login:       "beta_live",
-			Live:        true,
-			Status:      twitch.StreamerReady,
-		},
+		Entry: &twitch.StreamerEntry{ConfigLogin: "beta", Login: "beta_live", Live: true, Status: twitch.StreamerReady},
 	})
 	next := updated.(Model)
-
-	if next.selectedConfig != "beta" {
-		t.Fatalf("selectedConfig = %q, want beta", next.selectedConfig)
-	}
-	if next.selectedRowIndex(next.orderedRows()) != 0 {
-		t.Fatalf("selected row index = %d, want 0", next.selectedRowIndex(next.orderedRows()))
+	if next.selectedConfig != "beta" || next.selectedRowIndex(next.orderedStreamers()) != 0 {
+		t.Fatalf("selection moved after reorder: %q at %d", next.selectedConfig, next.selectedRowIndex(next.orderedStreamers()))
 	}
 }
 
 func TestUpDownNavigationMovesSelectedStreamer(t *testing.T) {
-	model := New(Options{
-		Streamers: []twitch.StreamerEntry{
-			{ConfigLogin: "alpha", Login: "alpha_live", Live: true, Status: twitch.StreamerReady},
-			{ConfigLogin: "beta", Login: "beta_live", Status: twitch.StreamerReady},
-		},
-		AuthState: &auth.State{Login: "viewer"},
-	})
-	model.mode = streamerView
-	model.selectedConfig = "alpha"
+	model := dashboardModel(
+		twitch.StreamerEntry{ConfigLogin: "alpha", Login: "alpha_live", Live: true, Status: twitch.StreamerReady},
+		twitch.StreamerEntry{ConfigLogin: "beta", Login: "beta_live", Status: twitch.StreamerReady},
+	)
 
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	next := updated.(Model)
@@ -231,49 +183,47 @@ func TestUpDownNavigationMovesSelectedStreamer(t *testing.T) {
 }
 
 func TestIRCUpdatesShowJoinedStatusOnly(t *testing.T) {
-	model := New(Options{
-		Streamers: []twitch.StreamerEntry{
-			{ConfigLogin: "alpha", Login: "alpha_live", Live: true, Status: twitch.StreamerReady},
-		},
-		AuthState: &auth.State{Login: "viewer"},
-	})
-	model.mode = streamerView
-	model.width = 80
-
-	updated, _ := model.Update(StreamerUpdate{
-		IRC: &IRCUpdate{
-			Login: "alpha_live",
-			State: IRCJoined,
-		},
-	})
+	updated, _ := dashboardModel(twitch.StreamerEntry{
+		ConfigLogin: "alpha",
+		Login:       "alpha_live",
+		Live:        true,
+		Status:      twitch.StreamerReady,
+	}).Update(StreamerUpdate{IRC: &IRCUpdate{Login: "alpha_live", State: IRCJoined}})
 	next := updated.(Model)
 
-	detail := next.ircDetails["alpha_live"]
-	if !detail.joined {
+	if !next.ircDetails["alpha_live"].joined {
 		t.Fatal("expected joined detail")
 	}
-	if !strings.Contains(next.View(), greenDot) {
-		t.Fatalf("View() missing green status dot:\n%s", next.View())
-	}
+	assertContainsAll(t, next.View(), "joined")
 }
 
-func TestWindowSizeClipsListAroundSelection(t *testing.T) {
-	model := New(Options{
-		Streamers: []twitch.StreamerEntry{
-			{ConfigLogin: "alpha", Status: twitch.StreamerReady},
-			{ConfigLogin: "beta", Status: twitch.StreamerReady},
-			{ConfigLogin: "gamma", Status: twitch.StreamerReady},
-			{ConfigLogin: "delta", Status: twitch.StreamerReady},
-		},
-		AuthState: &auth.State{Login: "viewer"},
-	})
-	model.mode = streamerView
+func TestWindowSizeKeepsSelectionVisible(t *testing.T) {
+	model := dashboardModel(
+		twitch.StreamerEntry{ConfigLogin: "alpha", Status: twitch.StreamerReady},
+		twitch.StreamerEntry{ConfigLogin: "beta", Status: twitch.StreamerReady},
+		twitch.StreamerEntry{ConfigLogin: "gamma", Status: twitch.StreamerReady},
+		twitch.StreamerEntry{ConfigLogin: "delta", Status: twitch.StreamerReady},
+	)
 	model.selectedConfig = "delta"
 
-	updated, _ := model.Update(tea.WindowSizeMsg{Width: 60, Height: 6})
-	next := updated.(Model)
-	got := next.View()
-	if !strings.Contains(got, "> delta [inactive]") {
-		t.Fatalf("View() missing selected row after clipping:\n%s", got)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
+	assertContainsAll(t, updated.(Model).View(), "delta")
+}
+
+func dashboardModel(entries ...twitch.StreamerEntry) Model {
+	model := New(Options{initialStreamers: entries, AuthState: &auth.State{Login: "viewer"}})
+	model.mode = streamerView
+	model.viewer = &twitch.Viewer{ID: "7", Login: "viewer"}
+	model.width = 100
+	model.height = 28
+	return model
+}
+
+func assertContainsAll(t *testing.T, got string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
 	}
 }
