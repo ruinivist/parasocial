@@ -141,4 +141,19 @@ func TestPersistedOperationHashes(t *testing.T) {
 	if got := req.Extensions.PersistedQuery.SHA256Hash; got != "94e82a7b1e3c21e186daa73ee2afc4b8f23bade1fbbff6fe8ac133f50a2f58ca" {
 		t.Fatalf("hash = %q", got)
 	}
+
+	channelPoints := ChannelPointsContext("streamer")
+	if got := channelPoints.Extensions.PersistedQuery.SHA256Hash; got != "1530a003a7d374b0380b79db0be0534f30ff46e61cffa2bc0e2468a909fbc024" {
+		t.Fatalf("channel points hash = %q", got)
+	}
+
+	claim := ClaimCommunityPoints("7", "claim-1")
+	if got := claim.Extensions.PersistedQuery.SHA256Hash; got != "46aaeebe02c99afdf4fc97c7c0cba964124bf6b0af229395f1f6d1feed05b3d0" {
+		t.Fatalf("claim hash = %q", got)
+	}
+
+	streamInfo := VideoPlayerStreamInfoOverlayChannel("streamer")
+	if got := streamInfo.Extensions.PersistedQuery.SHA256Hash; got != "198492e0857f6aedead9665c81c5a06d67b25b58034649687124083ff288597d" {
+		t.Fatalf("stream info hash = %q", got)
+	}
 }

@@ -15,6 +15,7 @@ import (
 	"parasocial/internal/auth"
 	"parasocial/internal/gql"
 	"parasocial/internal/irc"
+	"parasocial/internal/miner"
 	"parasocial/internal/twitch"
 )
 
@@ -135,7 +136,10 @@ func (r *runtime) startResolve(state *auth.State, ch chan<- StreamerUpdate) {
 			ch <- StreamerUpdate{Err: err, Done: true}
 			return
 		}
-		if err := resolveStreamerEntriesWithSleep(r.ctx, service, state, r.logins, ircManager, func(update StreamerUpdate) {
+		minerManager := miner.NewManager(r.ctx, service, nil)
+		defer minerManager.Close()
+
+		if err := resolveStreamerEntriesWithSleep(r.ctx, service, state, r.logins, ircManager, minerManager, func(update StreamerUpdate) {
 			ch <- update
 		}, r.refreshEvery, r.sleep); err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -153,10 +157,20 @@ type streamerService interface {
 	ResolveStreamer(context.Context, string) (*twitch.Channel, error)
 	StreamInfo(context.Context, string) (*twitch.StreamInfo, error)
 	PlaybackAccessToken(context.Context, string) (*twitch.PlaybackToken, error)
+	LoadChannelPointsContext(context.Context, string) (*twitch.ChannelPointsContext, error)
+	ClaimCommunityPoints(context.Context, string, string) error
+	StreamMetadata(context.Context, string) (*twitch.StreamMetadata, error)
+	FetchSpadeURL(context.Context, string) (string, error)
+	TouchPlayback(context.Context, string, *twitch.PlaybackToken) error
+	SendMinuteWatched(context.Context, string, twitch.MinuteWatchedPayload) error
 }
 
 type ircSyncer interface {
 	Sync(context.Context, string, string, []irc.Target)
+}
+
+type minerSyncer interface {
+	Sync(context.Context, *auth.State, *twitch.Viewer, []twitch.StreamerEntry)
 }
 
 func newTwitchService(httpClient *http.Client, state *auth.State) (*twitch.Service, error) {
@@ -172,7 +186,11 @@ func newTwitchService(httpClient *http.Client, state *auth.State) (*twitch.Servi
 	if err := client.Validate(); err != nil {
 		return nil, fmt.Errorf("configure graphql session: %w", err)
 	}
-	return &twitch.Service{GQL: client}, nil
+	return &twitch.Service{
+		GQL:        client,
+		HTTPClient: httpClient,
+		Session:    client.Session,
+	}, nil
 }
 
 func newIRCManager(ch chan<- StreamerUpdate) *irc.Manager {
@@ -190,11 +208,11 @@ func newIRCManager(ch chan<- StreamerUpdate) *irc.Manager {
 	}
 }
 
-func resolveStreamerEntries(ctx context.Context, service streamerService, state *auth.State, logins []string, syncer ircSyncer, send func(StreamerUpdate)) error {
-	return resolveStreamerEntriesWithSleep(ctx, service, state, logins, syncer, send, streamerRefreshInterval, sleepContext)
+func resolveStreamerEntries(ctx context.Context, service streamerService, state *auth.State, logins []string, ircSyncer ircSyncer, minerSyncer minerSyncer, send func(StreamerUpdate)) error {
+	return resolveStreamerEntriesWithSleep(ctx, service, state, logins, ircSyncer, minerSyncer, send, streamerRefreshInterval, sleepContext)
 }
 
-func resolveStreamerEntriesWithSleep(ctx context.Context, service streamerService, state *auth.State, logins []string, syncer ircSyncer, send func(StreamerUpdate), interval time.Duration, sleep func(context.Context, time.Duration) error) error {
+func resolveStreamerEntriesWithSleep(ctx context.Context, service streamerService, state *auth.State, logins []string, ircSyncer ircSyncer, minerSyncer minerSyncer, send func(StreamerUpdate), interval time.Duration, sleep func(context.Context, time.Duration) error) error {
 	viewer, err := service.CurrentUser(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve current user: %w", err)
@@ -202,7 +220,7 @@ func resolveStreamerEntriesWithSleep(ctx context.Context, service streamerServic
 	send(StreamerUpdate{Viewer: viewer})
 
 	entries := twitch.LoadingStreamerEntries(logins)
-	syncWatchedChannels(ctx, syncer, state, entries)
+	syncRuntimeState(ctx, ircSyncer, minerSyncer, state, viewer, entries)
 
 	for {
 		for index, login := range logins {
@@ -215,7 +233,7 @@ func resolveStreamerEntriesWithSleep(ctx context.Context, service streamerServic
 				Index: index,
 				Entry: entry,
 			})
-			syncWatchedChannels(ctx, syncer, state, entries)
+			syncRuntimeState(ctx, ircSyncer, minerSyncer, state, viewer, entries)
 		}
 		if err := sleep(ctx, interval); err != nil {
 			return err
@@ -276,11 +294,13 @@ func sleepContext(ctx context.Context, duration time.Duration) error {
 	}
 }
 
-func syncWatchedChannels(ctx context.Context, syncer ircSyncer, state *auth.State, entries []twitch.StreamerEntry) {
-	if syncer == nil || state == nil {
-		return
+func syncRuntimeState(ctx context.Context, ircSyncer ircSyncer, minerSyncer minerSyncer, state *auth.State, viewer *twitch.Viewer, entries []twitch.StreamerEntry) {
+	if ircSyncer != nil && state != nil {
+		ircSyncer.Sync(ctx, state.Login, state.AccessToken, watchedIRCTargets(entries))
 	}
-	syncer.Sync(ctx, state.Login, state.AccessToken, watchedIRCTargets(entries))
+	if minerSyncer != nil {
+		minerSyncer.Sync(ctx, state, viewer, entries)
+	}
 }
 
 func watchedIRCTargets(entries []twitch.StreamerEntry) []irc.Target {
