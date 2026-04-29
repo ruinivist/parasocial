@@ -96,7 +96,7 @@ func (m Model) renderDetailPanel() string {
 func (m Model) renderDetailTabs() string {
 	tabs := []string{
 		m.renderDetailTabButton(infoTab, "Info"),
-		m.renderDetailTabButton(ircTab, "IRC"),
+		m.renderDetailTabButton(ircTab, "Chat"),
 		m.renderDetailTabButton(minerTab, "Miner"),
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
@@ -111,22 +111,23 @@ func (m Model) renderDetailTabButton(tab detailTab, label string) string {
 
 func (m Model) renderInfoTab(entry twitch.StreamerEntry) string {
 	lines := []string{
-		"Status: " + statusText(entry),
+		"Channel: " + streamerName(entry),
 	}
 	if entry.ChannelID != "" {
 		lines = append(lines, "Channel ID: "+entry.ChannelID)
 	}
+	lines = append(lines, "Status: "+statusText(entry))
 
 	detail := m.ircDetails[normalizeKey(entry.Login)]
 	if !isActive(entry) {
-		lines = append(lines, "IRC: "+mutedStyle.Render("inactive"))
+		lines = append(lines, "Chat: "+mutedStyle.Render("inactive"))
 		return strings.Join(lines, "\n")
 	}
 
 	if detail.joined {
-		lines = append(lines, "IRC: "+accentStyle.Render("joined"))
+		lines = append(lines, "Chat: "+accentStyle.Render("joined"))
 	} else {
-		lines = append(lines, "IRC: "+mutedStyle.Render("not joined"))
+		lines = append(lines, "Chat: "+mutedStyle.Render("not joined"))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -145,24 +146,24 @@ func (m Model) renderStreamerRows() string {
 		return mutedStyle.Render("none")
 	}
 
-	lines := make([]string, 0, len(entries)*2)
+	lines := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		nameStyle, descStyle := rowNameStyle, rowDescStyle
+		nameStyle := rowNameStyle
 		if entry.ConfigLogin == m.selectedConfig {
-			nameStyle, descStyle = selectedRowNameStyle, selectedRowDescStyle
+			nameStyle = selectedRowNameStyle
 		}
-		detail := m.ircDetails[normalizeKey(entry.Login)]
-		lines = append(lines,
-			nameStyle.Render(streamerName(entry)),
-			descStyle.Render(rawStatus(entry)+" | "+ircSummary(detail)),
-		)
+		label := nameStyle.Render(streamerName(entry))
+		if isActive(entry) {
+			label += " " + accentStyle.Render("●")
+		}
+		lines = append(lines, label)
 	}
 	return strings.Join(lines, "\n")
 }
 
 func (m Model) visibleStreamers() []twitch.StreamerEntry {
 	entries := m.orderedStreamers()
-	visible := max(1, streamerListHeight(m.height)/2)
+	visible := max(1, streamerListHeight(m.height))
 	if len(entries) <= visible {
 		return entries
 	}
@@ -202,13 +203,13 @@ func watchingSummary(streamers []twitch.StreamerEntry) string {
 func statusText(entry twitch.StreamerEntry) string {
 	switch {
 	case entry.Status == twitch.StreamerError:
-		return statusErrorStyle.Render("error")
+		return errorStyle.Render("error")
 	case entry.Status == twitch.StreamerLoading:
 		return mutedStyle.Render("loading")
 	case entry.Live:
-		return statusLiveStyle.Render("live")
+		return accentStyle.Render("live")
 	default:
-		return statusIdleStyle.Render("offline")
+		return mutedStyle.Render("offline")
 	}
 }
 

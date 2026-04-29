@@ -28,22 +28,25 @@ func (f *fakeModelRuntime) startResolve(state *auth.State, ch chan<- StreamerUpd
 
 func TestViewDisplaysDashboardWithSelectedStreamerDetails(t *testing.T) {
 	model := dashboardModel(
-		twitch.StreamerEntry{ConfigLogin: "alpha", Login: "alpha_live", Live: true, Status: twitch.StreamerReady},
+		twitch.StreamerEntry{ConfigLogin: "alpha", Login: "alpha_live", ChannelID: "1", Live: true, Status: twitch.StreamerReady},
 		twitch.StreamerEntry{ConfigLogin: "beta", Login: "beta_live", Live: true, Status: twitch.StreamerReady},
 		twitch.StreamerEntry{ConfigLogin: "gamma", Status: twitch.StreamerLoading},
 	)
 
-	assertContainsAll(t, model.View(),
+	view := model.View()
+	assertContainsAll(t, view,
 		"Watching: alpha_live, beta_live",
 		"Info",
-		"IRC",
+		"Chat",
 		"Miner",
-		"live | irc idle",
 		"gamma",
-		"loading",
+		"alpha_live ●",
+		"Channel: alpha_live",
+		"Channel ID: 1",
 		"Status: live",
-		"IRC: not joined",
+		"Chat: not joined",
 	)
+	assertInOrder(t, view, "Channel: alpha_live", "Channel ID: 1", "Status: live", "Chat: not joined")
 }
 
 func TestAuthUpdateAppendsLogLine(t *testing.T) {
@@ -123,6 +126,19 @@ func TestStreamerUpdateAppliesEntry(t *testing.T) {
 func TestViewDisplaysInactiveDetailForOfflineStreamer(t *testing.T) {
 	model := dashboardModel(twitch.StreamerEntry{ConfigLogin: "alpha", Login: "alpha_live", Status: twitch.StreamerReady})
 	assertContainsAll(t, model.View(), "offline", "inactive")
+}
+
+func assertInOrder(t *testing.T, value string, parts ...string) {
+	t.Helper()
+
+	offset := 0
+	for _, part := range parts {
+		index := strings.Index(value[offset:], part)
+		if index < 0 {
+			t.Fatalf("expected %q after offset %d in:\n%s", part, offset, value)
+		}
+		offset += index + len(part)
+	}
 }
 
 func TestActiveStreamersRenderBeforeInactiveInConfigOrder(t *testing.T) {

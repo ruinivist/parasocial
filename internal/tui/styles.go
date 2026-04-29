@@ -6,54 +6,52 @@ import (
 )
 
 var (
+	titleColor         = lipgloss.Color("#E6EDF3")
+	mutedColor         = lipgloss.Color("#8B949E")
+	accentColor        = lipgloss.Color("#7CE38B")
+	warnColor          = lipgloss.Color("#F0883E")
+	errorColor         = lipgloss.Color("#FF7B72")
+	panelBorderColor   = lipgloss.Color("#30363D")
+	tabActiveTextColor = lipgloss.Color("#0D1117")
+	tabInactiveBgColor = lipgloss.Color("#1B1F24")
+	rowTextColor       = lipgloss.Color("#C9D1D9")
+)
+
+var (
 	pageStyle = lipgloss.NewStyle().
 			Padding(1, 2)
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#E6EDF3"))
+			Foreground(titleColor)
 	mutedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#6E7681"))
+			Foreground(mutedColor)
 	accentStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#7CE38B"))
+			Foreground(accentColor)
 	warnStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#F0883E"))
+			Foreground(warnColor)
 	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FF7B72"))
+			Foreground(errorColor)
 	panelStyle = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color("#30363D")).
+			BorderForeground(panelBorderColor).
 			Padding(1, 2)
-	focusedPanelStyle = panelStyle.
-				BorderForeground(lipgloss.Color("#7CE38B"))
-	labelStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#8B949E")).
+	focusedPanelStyle = panelStyle.Copy().
+				BorderForeground(accentColor)
+	labelStyle = mutedStyle.Copy().
 			Bold(true)
-	activeTabStyle = lipgloss.NewStyle().
+	activeTabStyle = accentStyle.Copy().
 			Bold(true).
-			Foreground(lipgloss.Color("#0D1117")).
-			Background(lipgloss.Color("#7CE38B"))
-	inactiveTabStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#8B949E")).
-				Background(lipgloss.Color("#1B1F24"))
-	statusLiveStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#7CE38B"))
-	statusIdleStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#8B949E"))
-	statusErrorStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#FF7B72"))
+			Foreground(tabActiveTextColor).
+			Background(accentColor)
+	inactiveTabStyle = mutedStyle.Copy().
+				Background(tabInactiveBgColor)
 	rowNameStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#C9D1D9")).
+			Foreground(rowTextColor).
 			PaddingLeft(1)
-	rowDescStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#8B949E")).
-			PaddingLeft(1)
-	selectedRowNameStyle = rowNameStyle.
+	selectedRowNameStyle = rowNameStyle.Copy().
 				Border(lipgloss.NormalBorder(), false, false, false, true).
-				BorderForeground(lipgloss.Color("#7CE38B")).
-				Foreground(lipgloss.Color("#E6EDF3"))
-	selectedRowDescStyle = rowDescStyle.
-				Border(lipgloss.NormalBorder(), false, false, false, true).
-				BorderForeground(lipgloss.Color("#7CE38B"))
+				BorderForeground(accentColor).
+				Foreground(titleColor)
 )
 
 func newAuthViewport(width, height int) viewport.Model {
