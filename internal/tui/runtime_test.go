@@ -9,6 +9,7 @@ import (
 
 	"parasocial/internal/auth"
 	"parasocial/internal/irc"
+	"parasocial/internal/miner"
 	"parasocial/internal/twitch"
 )
 
@@ -204,6 +205,23 @@ func TestResolveStreamerEntriesRefreshUpdatesWatchedChannels(t *testing.T) {
 		{},
 		{"beta_live"},
 	})
+}
+
+func TestNewMinerLogSinkBridgesMinerEntriesIntoStreamerUpdates(t *testing.T) {
+	ch := make(chan StreamerUpdate, 1)
+
+	newMinerLogSink(ch)(miner.LogEntry{
+		Login: "alpha_live",
+		Line:  "pubsub points earned: balance=42",
+	})
+
+	update := <-ch
+	if update.Miner == nil {
+		t.Fatal("expected miner update")
+	}
+	if update.Miner.Login != "alpha_live" || update.Miner.Line != "pubsub points earned: balance=42" {
+		t.Fatalf("miner update = %#v", update.Miner)
+	}
 }
 
 type serviceOption func(*fakeStreamerService)

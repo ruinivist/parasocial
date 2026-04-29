@@ -16,6 +16,7 @@ type fakeService struct {
 	metadata      map[string]*twitch.StreamMetadata
 	spadeURLs     map[string]string
 	playbackErr   map[string]error
+	claimErr      map[string]error
 
 	claimed   []string
 	watched   []string
@@ -31,6 +32,9 @@ func (f *fakeService) LoadChannelPointsContext(_ context.Context, login string) 
 
 func (f *fakeService) ClaimCommunityPoints(_ context.Context, channelID, claimID string) error {
 	f.claimed = append(f.claimed, channelID+":"+claimID)
+	if err, ok := f.claimErr[channelID+":"+claimID]; ok {
+		return err
+	}
 	return nil
 }
 
@@ -90,7 +94,7 @@ func TestManagerSyncSeedsAndClaims(t *testing.T) {
 		},
 	}
 	pubsub := &fakePubSub{}
-	manager := NewManager(context.Background(), service, pubsub)
+	manager := NewManager(context.Background(), service, pubsub, nil)
 	defer manager.Close()
 	manager.sleep = cancelSleep
 
@@ -125,7 +129,7 @@ func TestManagerWatchOnceUsesTopTwoLiveStreamers(t *testing.T) {
 			"gamma_live": {Balance: 30},
 		},
 	}
-	manager := NewManager(context.Background(), service, &fakePubSub{})
+	manager := NewManager(context.Background(), service, &fakePubSub{}, nil)
 	defer manager.Close()
 	manager.sleep = cancelSleep
 
@@ -156,7 +160,7 @@ func TestManagerWatchOnceUsesTopTwoLiveStreamers(t *testing.T) {
 
 func TestHandlePubSubEventUpdatesBalanceAndClaims(t *testing.T) {
 	service := &fakeService{}
-	manager := NewManager(context.Background(), service, &fakePubSub{})
+	manager := NewManager(context.Background(), service, &fakePubSub{}, nil)
 	defer manager.Close()
 	manager.entries["alpha"] = &streamerState{ConfigLogin: "alpha", ChannelID: "1", Login: "alpha_live", Live: true}
 
@@ -170,6 +174,32 @@ func TestHandlePubSubEventUpdatesBalanceAndClaims(t *testing.T) {
 	}
 	if got, want := service.claimed, []string{"1:claim-2"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("claimed = %#v, want %#v", got, want)
+	}
+}
+
+func TestManagerLogsPubSubEventsAndFailures(t *testing.T) {
+	service := &fakeService{
+		claimErr: map[string]error{
+			"1:claim-2": errors.New("claim rejected"),
+		},
+	}
+	var logs []LogEntry
+	manager := NewManager(context.Background(), service, &fakePubSub{}, func(entry LogEntry) {
+		logs = append(logs, entry)
+	})
+	defer manager.Close()
+	manager.entries["alpha"] = &streamerState{ConfigLogin: "alpha", ChannelID: "1", Login: "alpha_live", Live: true}
+
+	manager.handlePubSubEvent(Event{MessageType: "points-earned", ChannelID: "1", Balance: 555, Timestamp: "t1", Topic: "community-points-user-v1"})
+	manager.handlePubSubEvent(Event{MessageType: "claim-available", ChannelID: "1", ClaimID: "claim-2", Timestamp: "t2", Topic: "community-points-user-v1"})
+
+	if got, want := logs, []LogEntry{
+		{Login: "alpha_live", Line: "pubsub points earned: balance=555"},
+		{Login: "alpha_live", Line: "pubsub claim available: claim-2"},
+		{Login: "alpha_live", Line: "claiming bonus chest: claim-2"},
+		{Login: "alpha_live", Line: "claim failed: claim rejected"},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("logs = %#v, want %#v", got, want)
 	}
 }
 

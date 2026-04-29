@@ -26,7 +26,8 @@ type panelFocus int
 const (
 	focusStreamers panelFocus = iota
 	focusInfo
-	focusChat
+	focusIRC
+	focusMiner
 )
 
 type detailTab int
@@ -34,6 +35,7 @@ type detailTab int
 const (
 	infoTab detailTab = iota
 	ircTab
+	minerTab
 )
 
 type modelRuntime interface {
@@ -58,8 +60,10 @@ type Model struct {
 	selectedConfig  string
 	focus           panelFocus
 	ircDetails      map[string]ircDetail
+	minerDetails    map[string][]string
 	authViewport    viewport.Model
 	ircViewport     viewport.Model
+	minerViewport   viewport.Model
 }
 
 type ircDetail struct {
@@ -81,18 +85,23 @@ func New(options Options) Model {
 		authLogs:     []string{},
 		mode:         authView,
 		ircDetails:   make(map[string]ircDetail),
+		minerDetails: make(map[string][]string),
 		width:        defaultViewWidth,
 		height:       24,
 		focus:        focusStreamers,
 		authViewport: newAuthViewport(contentWidth(defaultViewWidth), authViewportHeight(24)),
 		ircViewport:  newIRCViewport(detailViewportWidth(defaultViewWidth), detailViewportHeight(24)),
+		minerViewport: newMinerViewport(
+			detailViewportWidth(defaultViewWidth),
+			detailViewportHeight(24),
+		),
 	}
 	if options.AuthState != nil {
 		model.mode = streamerView
 	}
 	model.ensureSelection()
 	model.syncAuthViewport()
-	model.syncIRCViewport(true)
+	model.syncDetailViewports(true)
 	return model
 }
 
@@ -122,7 +131,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.resizeComponents()
 		m.ensureSelection()
-		m.syncIRCViewport(false)
+		m.syncDetailViewports(false)
 		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -162,9 +171,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.authViewport, cmd = m.authViewport.Update(msg)
 		return m, cmd
 	}
-	if m.focus == focusChat {
+	if m.focus == focusIRC {
 		var cmd tea.Cmd
 		m.ircViewport, cmd = m.ircViewport.Update(msg)
+		return m, cmd
+	}
+	if m.focus == focusMiner {
+		var cmd tea.Cmd
+		m.minerViewport, cmd = m.minerViewport.Update(msg)
 		return m, cmd
 	}
 	return m, nil
@@ -189,11 +203,12 @@ func (m Model) updateAuth(msg AuthUpdate) (tea.Model, tea.Cmd) {
 			m.resolveErr = nil
 			m.streamers = loadingEntries(m.streamers)
 			m.ircDetails = make(map[string]ircDetail)
+			m.minerDetails = make(map[string][]string)
 			m.selectedConfig = ""
 			m.focus = focusStreamers
 			m.ensureSelection()
 			m.resizeComponents()
-			m.syncIRCViewport(true)
+			m.syncDetailViewports(true)
 			return m, startStreamerResolution(m.runtime, m.authState)
 		}
 		return m, nil
@@ -215,12 +230,15 @@ func (m Model) updateStreamer(msg StreamerUpdate) (tea.Model, tea.Cmd) {
 	if msg.IRC != nil {
 		m.applyIRCUpdate(*msg.IRC)
 	}
+	if msg.Miner != nil {
+		m.applyMinerUpdate(*msg.Miner)
+	}
 	if msg.Err != nil {
 		m.resolveErr = msg.Err
 	}
 	m.ensureSelection()
 	m.resizeComponents()
-	m.syncIRCViewport(false)
+	m.syncDetailViewports(false)
 	if msg.Done {
 		return m, nil
 	}
@@ -244,12 +262,18 @@ func (m *Model) applyIRCUpdate(update IRCUpdate) {
 		detail.joined = false
 	}
 	if message, ok := formatIRCChatLine(update.Line); ok {
-		detail.messages = append(detail.messages, message)
-		if len(detail.messages) > maxIRCMessageHistory {
-			detail.messages = append([]string(nil), detail.messages[len(detail.messages)-maxIRCMessageHistory:]...)
-		}
+		detail.messages = appendCappedHistory(detail.messages, message)
 	}
 	m.ircDetails[login] = detail
+}
+
+func (m *Model) applyMinerUpdate(update MinerUpdate) {
+	login := normalizeKey(update.Login)
+	line := strings.TrimSpace(update.Line)
+	if login == "" || line == "" {
+		return
+	}
+	m.minerDetails[login] = appendCappedHistory(m.minerDetails[login], line)
 }
 
 func (m *Model) ensureSelection() {
@@ -274,7 +298,7 @@ func (m *Model) moveSelection(delta int) {
 	entries := m.orderedStreamers()
 	if len(entries) == 0 {
 		m.selectedConfig = ""
-		m.syncIRCViewport(true)
+		m.syncDetailViewports(true)
 		return
 	}
 
@@ -288,7 +312,7 @@ func (m *Model) moveSelection(delta int) {
 	}
 	m.selectedConfig = entries[selected].ConfigLogin
 	if m.selectedConfig != current {
-		m.syncIRCViewport(true)
+		m.syncDetailViewports(true)
 	}
 }
 
@@ -296,8 +320,10 @@ func (m *Model) moveFocusLeft() {
 	switch m.focus {
 	case focusInfo:
 		m.focus = focusStreamers
-	case focusChat:
+	case focusIRC:
 		m.focus = focusInfo
+	case focusMiner:
+		m.focus = focusIRC
 	}
 }
 
@@ -306,7 +332,9 @@ func (m *Model) moveFocusRight() {
 	case focusStreamers:
 		m.focus = focusInfo
 	case focusInfo:
-		m.focus = focusChat
+		m.focus = focusIRC
+	case focusIRC:
+		m.focus = focusMiner
 	}
 }
 
@@ -343,6 +371,8 @@ func (m *Model) resizeComponents() {
 	m.authViewport.Height = authViewportHeight(m.height)
 	m.ircViewport.Width = detailViewportWidth(m.width)
 	m.ircViewport.Height = detailViewportHeight(m.height)
+	m.minerViewport.Width = detailViewportWidth(m.width)
+	m.minerViewport.Height = detailViewportHeight(m.height)
 }
 
 func (m *Model) syncAuthViewport() {
@@ -369,6 +399,23 @@ func (m *Model) syncIRCViewport(forceBottom bool) {
 	}
 }
 
+func (m *Model) syncMinerViewport(forceBottom bool) {
+	if m.minerViewport.Width <= 0 || m.minerViewport.Height <= 0 {
+		return
+	}
+
+	stickToBottom := forceBottom || m.minerViewport.AtBottom()
+	m.minerViewport.SetContent(m.minerViewportContent())
+	if stickToBottom {
+		m.minerViewport.GotoBottom()
+	}
+}
+
+func (m *Model) syncDetailViewports(forceBottom bool) {
+	m.syncIRCViewport(forceBottom)
+	m.syncMinerViewport(forceBottom)
+}
+
 func (m Model) ircViewportContent() string {
 	entry, ok := m.selectedEntry()
 	if !ok {
@@ -388,6 +435,19 @@ func (m Model) ircViewportContent() string {
 	return strings.Join(detail.messages, "\n")
 }
 
+func (m Model) minerViewportContent() string {
+	entry, ok := m.selectedEntry()
+	if !ok {
+		return "No streamers configured"
+	}
+
+	logins := m.minerDetails[normalizeKey(entry.Login)]
+	if len(logins) == 0 {
+		return "Waiting for miner activity..."
+	}
+	return strings.Join(logins, "\n")
+}
+
 func (m Model) selectedEntry() (twitch.StreamerEntry, bool) {
 	entries := m.orderedStreamers()
 	selected := m.selectedRowIndex(entries)
@@ -398,10 +458,14 @@ func (m Model) selectedEntry() (twitch.StreamerEntry, bool) {
 }
 
 func (m Model) visibleDetailTab() detailTab {
-	if m.focus == focusChat {
+	switch m.focus {
+	case focusIRC:
 		return ircTab
+	case focusMiner:
+		return minerTab
+	default:
+		return infoTab
 	}
-	return infoTab
 }
 
 func (m Model) isStreamersFocused() bool {
@@ -409,7 +473,7 @@ func (m Model) isStreamersFocused() bool {
 }
 
 func (m Model) isRightPanelFocused() bool {
-	return m.focus == focusInfo || m.focus == focusChat
+	return m.focus == focusInfo || m.focus == focusIRC || m.focus == focusMiner
 }
 
 func isActive(entry twitch.StreamerEntry) bool {
@@ -448,6 +512,14 @@ func formatIRCChatLine(line string) (string, bool) {
 		return "", false
 	}
 	return user + ": " + message, true
+}
+
+func appendCappedHistory(history []string, line string) []string {
+	history = append(history, line)
+	if len(history) <= maxIRCMessageHistory {
+		return history
+	}
+	return append([]string(nil), history[len(history)-maxIRCMessageHistory:]...)
 }
 
 func loadingEntries(entries []twitch.StreamerEntry) []twitch.StreamerEntry {

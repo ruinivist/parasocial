@@ -37,6 +37,7 @@ func TestViewDisplaysDashboardWithSelectedStreamerDetails(t *testing.T) {
 		"Watching: alpha_live, beta_live",
 		"Info",
 		"IRC",
+		"Miner",
 		"live | irc idle",
 		"gamma",
 		"loading",
@@ -204,20 +205,32 @@ func TestFocusNavigationMovesBetweenPanels(t *testing.T) {
 
 	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyRight})
 	next = updated.(Model)
-	if next.focus != focusChat || next.visibleDetailTab() != ircTab {
-		t.Fatalf("focus after second right = %v with tab %v, want %v and %v", next.focus, next.visibleDetailTab(), focusChat, ircTab)
+	if next.focus != focusIRC || next.visibleDetailTab() != ircTab {
+		t.Fatalf("focus after second right = %v with tab %v, want %v and %v", next.focus, next.visibleDetailTab(), focusIRC, ircTab)
 	}
 
 	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyRight})
 	next = updated.(Model)
-	if next.focus != focusChat {
-		t.Fatalf("focus after right on chat = %v, want %v", next.focus, focusChat)
+	if next.focus != focusMiner || next.visibleDetailTab() != minerTab {
+		t.Fatalf("focus after third right = %v with tab %v, want %v and %v", next.focus, next.visibleDetailTab(), focusMiner, minerTab)
+	}
+
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyRight})
+	next = updated.(Model)
+	if next.focus != focusMiner {
+		t.Fatalf("focus after right on miner = %v, want %v", next.focus, focusMiner)
+	}
+
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	next = updated.(Model)
+	if next.focus != focusIRC {
+		t.Fatalf("focus after left from miner = %v, want %v", next.focus, focusIRC)
 	}
 
 	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	next = updated.(Model)
 	if next.focus != focusInfo {
-		t.Fatalf("focus after left from chat = %v, want %v", next.focus, focusInfo)
+		t.Fatalf("focus after left from irc = %v, want %v", next.focus, focusInfo)
 	}
 
 	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyLeft})
@@ -275,7 +288,7 @@ func TestIRCUpdatesShowJoinedStatusAndFormattedMessages(t *testing.T) {
 		Line:  ":someone!someone@someone.tmi.twitch.tv PRIVMSG #alpha_live :hello there",
 	}})
 	next = updated.(Model)
-	next.focus = focusChat
+	next.focus = focusIRC
 	next.syncIRCViewport(true)
 
 	assertContainsAll(t, next.View(), "someone: hello there")
@@ -286,7 +299,7 @@ func TestChatFocusUsesUpDownForViewportScroll(t *testing.T) {
 		twitch.StreamerEntry{ConfigLogin: "alpha", Login: "alpha_live", Live: true, Status: twitch.StreamerReady},
 		twitch.StreamerEntry{ConfigLogin: "beta", Login: "beta_live", Status: twitch.StreamerReady},
 	)
-	model.focus = focusChat
+	model.focus = focusIRC
 	model.ircDetails["alpha_live"] = ircDetail{
 		joined:   true,
 		messages: numberedMessages(20),
@@ -338,6 +351,56 @@ func TestIRCUpdatesKeepOnlyLast50ChatMessages(t *testing.T) {
 	}
 }
 
+func TestMinerUpdatesRenderAndKeepOnlyLast50Messages(t *testing.T) {
+	model := dashboardModel(twitch.StreamerEntry{
+		ConfigLogin: "alpha",
+		Login:       "alpha_live",
+		Live:        true,
+		Status:      twitch.StreamerReady,
+	})
+
+	next := model
+	for i := 1; i <= maxIRCMessageHistory+5; i++ {
+		updated, _ := next.Update(StreamerUpdate{Miner: &MinerUpdate{
+			Login: "alpha_live",
+			Line:  fmt.Sprintf("miner message %d", i),
+		}})
+		next = updated.(Model)
+	}
+	next.focus = focusMiner
+	next.syncMinerViewport(true)
+
+	logs := next.minerDetails["alpha_live"]
+	if len(logs) != maxIRCMessageHistory {
+		t.Fatalf("miner message count = %d, want %d", len(logs), maxIRCMessageHistory)
+	}
+	if logs[0] != "miner message 6" {
+		t.Fatalf("oldest retained miner message = %q", logs[0])
+	}
+	if logs[len(logs)-1] != "miner message 55" {
+		t.Fatalf("newest retained miner message = %q", logs[len(logs)-1])
+	}
+	assertContainsAll(t, next.View(), "miner message 55")
+}
+
+func TestMinerTabShowsHistoryForOfflineStreamer(t *testing.T) {
+	model := dashboardModel(twitch.StreamerEntry{
+		ConfigLogin: "alpha",
+		Login:       "alpha_live",
+		Status:      twitch.StreamerReady,
+	})
+
+	updated, _ := model.Update(StreamerUpdate{Miner: &MinerUpdate{
+		Login: "alpha_live",
+		Line:  "pubsub stream down",
+	}})
+	next := updated.(Model)
+	next.focus = focusMiner
+	next.syncMinerViewport(true)
+
+	assertContainsAll(t, next.View(), "pubsub stream down")
+}
+
 func TestIRCUpdatesIgnoreNonChatProtocolLines(t *testing.T) {
 	model := dashboardModel(twitch.StreamerEntry{
 		ConfigLogin: "alpha",
@@ -363,7 +426,7 @@ func TestIRCViewportAutoScrollsAtBottom(t *testing.T) {
 		Live:        true,
 		Status:      twitch.StreamerReady,
 	})
-	model.focus = focusChat
+	model.focus = focusIRC
 	model.ircDetails["alpha_live"] = ircDetail{
 		joined:   true,
 		messages: numberedMessages(20),
@@ -391,7 +454,7 @@ func TestIRCViewportPreservesManualScrollPosition(t *testing.T) {
 		Live:        true,
 		Status:      twitch.StreamerReady,
 	})
-	model.focus = focusChat
+	model.focus = focusIRC
 	model.ircDetails["alpha_live"] = ircDetail{
 		joined:   true,
 		messages: numberedMessages(20),
@@ -409,6 +472,56 @@ func TestIRCViewportPreservesManualScrollPosition(t *testing.T) {
 	}
 	if next.ircViewport.AtBottom() {
 		t.Fatal("expected viewport to remain off bottom after manual scroll")
+	}
+}
+
+func TestMinerViewportAutoScrollsAtBottom(t *testing.T) {
+	model := dashboardModel(twitch.StreamerEntry{
+		ConfigLogin: "alpha",
+		Login:       "alpha_live",
+		Live:        true,
+		Status:      twitch.StreamerReady,
+	})
+	model.focus = focusMiner
+	model.minerDetails["alpha_live"] = numberedMinerMessages(20)
+	model.syncMinerViewport(true)
+
+	if !model.minerViewport.AtBottom() {
+		t.Fatal("expected miner viewport to start at bottom")
+	}
+
+	updated, _ := model.Update(StreamerUpdate{Miner: &MinerUpdate{
+		Login: "alpha_live",
+		Line:  "newest miner event",
+	}})
+	next := updated.(Model)
+	if !next.minerViewport.AtBottom() {
+		t.Fatal("expected miner viewport to stay at bottom after new message")
+	}
+}
+
+func TestMinerViewportPreservesManualScrollPosition(t *testing.T) {
+	model := dashboardModel(twitch.StreamerEntry{
+		ConfigLogin: "alpha",
+		Login:       "alpha_live",
+		Live:        true,
+		Status:      twitch.StreamerReady,
+	})
+	model.focus = focusMiner
+	model.minerDetails["alpha_live"] = numberedMinerMessages(20)
+	model.syncMinerViewport(true)
+	model.minerViewport.GotoTop()
+
+	updated, _ := model.Update(StreamerUpdate{Miner: &MinerUpdate{
+		Login: "alpha_live",
+		Line:  "newest miner event",
+	}})
+	next := updated.(Model)
+	if next.minerViewport.YOffset != 0 {
+		t.Fatalf("miner viewport YOffset = %d, want 0", next.minerViewport.YOffset)
+	}
+	if next.minerViewport.AtBottom() {
+		t.Fatal("expected miner viewport to remain off bottom after manual scroll")
 	}
 }
 
@@ -432,7 +545,7 @@ func dashboardModel(entries ...twitch.StreamerEntry) Model {
 	model.width = 100
 	model.height = 28
 	model.resizeComponents()
-	model.syncIRCViewport(true)
+	model.syncDetailViewports(true)
 	return model
 }
 
@@ -440,6 +553,14 @@ func numberedMessages(count int) []string {
 	lines := make([]string, 0, count)
 	for i := 1; i <= count; i++ {
 		lines = append(lines, fmt.Sprintf("user%d: message %d", i, i))
+	}
+	return lines
+}
+
+func numberedMinerMessages(count int) []string {
+	lines := make([]string, 0, count)
+	for i := 1; i <= count; i++ {
+		lines = append(lines, fmt.Sprintf("miner message %d", i))
 	}
 	return lines
 }

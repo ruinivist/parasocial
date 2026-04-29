@@ -67,3 +67,9 @@ func newIRCViewport(width, height int) viewport.Model {
 	vp.Style = lipgloss.NewStyle()
 	return vp
 }
+
+func newMinerViewport(width, height int) viewport.Model {
+	vp := viewport.New(width, height)
+	vp.Style = lipgloss.NewStyle()
+	return vp
+}

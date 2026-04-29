@@ -85,6 +85,8 @@ func (m Model) renderDetailPanel() string {
 	switch m.visibleDetailTab() {
 	case ircTab:
 		body = m.renderIRCTab()
+	case minerTab:
+		body = m.renderMinerTab()
 	default:
 		body = m.renderInfoTab(entry)
 	}
@@ -95,6 +97,7 @@ func (m Model) renderDetailTabs() string {
 	tabs := []string{
 		m.renderDetailTabButton(infoTab, "Info"),
 		m.renderDetailTabButton(ircTab, "IRC"),
+		m.renderDetailTabButton(minerTab, "Miner"),
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
 }
@@ -130,6 +133,10 @@ func (m Model) renderInfoTab(entry twitch.StreamerEntry) string {
 
 func (m Model) renderIRCTab() string {
 	return m.ircViewport.View()
+}
+
+func (m Model) renderMinerTab() string {
+	return m.minerViewport.View()
 }
 
 func (m Model) renderStreamerRows() string {

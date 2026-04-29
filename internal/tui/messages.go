@@ -27,6 +27,7 @@ type StreamerUpdate struct {
 	Viewer *twitch.Viewer
 	Entry  *twitch.StreamerEntry
 	IRC    *IRCUpdate
+	Miner  *MinerUpdate
 	Index  int
 	Err    error
 	Done   bool
@@ -36,6 +37,12 @@ type StreamerUpdate struct {
 type IRCUpdate struct {
 	Login string
 	State IRCState
+	Line  string
+}
+
+// MinerUpdate carries one miner log line into the TUI.
+type MinerUpdate struct {
+	Login string
 	Line  string
 }
 

@@ -2,6 +2,7 @@ package miner
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -28,11 +29,18 @@ type PubSubSyncer interface {
 	Close() error
 }
 
+// LogEntry is one miner log line associated with a resolved streamer login.
+type LogEntry struct {
+	Login string
+	Line  string
+}
+
 // Manager owns background channel points mining state for the current authenticated user.
 type Manager struct {
 	ctx           context.Context
 	service       Service
 	pubsub        PubSubSyncer
+	onLog         func(LogEntry)
 	watchInterval time.Duration
 	sleep         func(context.Context, time.Duration) error
 
@@ -62,11 +70,12 @@ type streamerState struct {
 }
 
 // NewManager constructs one background miner manager.
-func NewManager(ctx context.Context, service Service, pubsub PubSubSyncer) *Manager {
+func NewManager(ctx context.Context, service Service, pubsub PubSubSyncer, onLog func(LogEntry)) *Manager {
 	manager := &Manager{
 		ctx:           ctx,
 		service:       service,
 		pubsub:        pubsub,
+		onLog:         onLog,
 		watchInterval: defaultWatchInterval,
 		sleep:         sleepContext,
 		entries:       make(map[string]*streamerState),
@@ -174,15 +183,21 @@ func (m *Manager) scheduleSeed(configLogin string) {
 		defer m.finishSeeding(configLogin)
 
 		channelPoints, err := m.service.LoadChannelPointsContext(m.ctx, login)
-		if err == nil {
+		if err != nil {
+			m.logf(login, "channel points seed failed: %v", err)
+		} else {
 			m.mu.Lock()
 			if current, ok := m.entries[configLogin]; ok && current.ChannelID == channelID {
 				current.ChannelPoints = channelPoints.Balance
 				current.seeded = true
 			}
 			m.mu.Unlock()
+			m.logf(login, "seeded channel points balance: %d", channelPoints.Balance)
 			if channelPoints.ClaimID != "" {
-				_ = m.service.ClaimCommunityPoints(m.ctx, channelID, channelPoints.ClaimID)
+				m.logf(login, "claiming bonus chest: %s", channelPoints.ClaimID)
+				if err := m.service.ClaimCommunityPoints(m.ctx, channelID, channelPoints.ClaimID); err != nil {
+					m.logf(login, "claim failed: %v", err)
+				}
 			}
 		}
 
@@ -217,20 +232,23 @@ func (m *Manager) scheduleRefresh(configLogin string) {
 
 		spadeURL, err := m.service.FetchSpadeURL(m.ctx, login)
 		if err != nil {
+			m.logf(login, "metadata refresh failed: fetch spade url: %v", err)
 			return
 		}
 		metadata, err := m.service.StreamMetadata(m.ctx, login)
 		if err != nil {
+			m.logf(login, "metadata refresh failed: stream metadata: %v", err)
 			return
 		}
 
 		m.mu.Lock()
-		defer m.mu.Unlock()
 		if current, ok := m.entries[configLogin]; ok && current.ChannelID == channelID {
 			current.SpadeURL = spadeURL
 			current.Metadata = metadata
 			current.Live = true
 		}
+		m.mu.Unlock()
+		m.logf(login, "refreshed playback metadata")
 	}()
 }
 
@@ -297,14 +315,17 @@ func (m *Manager) watchOnce(ctx context.Context) error {
 
 		token, err := m.service.PlaybackAccessToken(ctx, candidate.login)
 		if err != nil {
+			m.logf(candidate.login, "watch failed: playback token: %v", err)
 			continue
 		}
 		if err := m.service.TouchPlayback(ctx, candidate.login, token); err != nil {
+			m.logf(candidate.login, "watch failed: touch playback: %v", err)
 			continue
 		}
 
 		payload := twitch.BuildMinuteWatchedPayload(viewer.ID, candidate.channelID, candidate.login, candidate.metadata)
 		if err := m.service.SendMinuteWatched(ctx, candidate.spadeURL, payload); err != nil {
+			m.logf(candidate.login, "watch failed: minute watched: %v", err)
 			continue
 		}
 
@@ -323,6 +344,8 @@ func (m *Manager) handlePubSubEvent(event Event) {
 		return
 	}
 
+	m.logEvent(state.Login, event)
+
 	switch event.MessageType {
 	case "points-earned", "points-spent":
 		m.mu.Lock()
@@ -332,7 +355,10 @@ func (m *Manager) handlePubSubEvent(event Event) {
 		m.mu.Unlock()
 	case "claim-available":
 		if event.ClaimID != "" {
-			_ = m.service.ClaimCommunityPoints(m.ctx, state.ChannelID, event.ClaimID)
+			m.logf(state.Login, "claiming bonus chest: %s", event.ClaimID)
+			if err := m.service.ClaimCommunityPoints(m.ctx, state.ChannelID, event.ClaimID); err != nil {
+				m.logf(state.Login, "claim failed: %v", err)
+			}
 		}
 	case "stream-up":
 		m.mu.Lock()
@@ -357,6 +383,39 @@ func (m *Manager) handlePubSubEvent(event Event) {
 			m.scheduleRefresh(configLogin)
 		}
 	}
+}
+
+func (m *Manager) logEvent(login string, event Event) {
+	switch event.MessageType {
+	case "points-earned":
+		m.logf(login, "pubsub points earned: balance=%d", event.Balance)
+	case "points-spent":
+		m.logf(login, "pubsub points spent: balance=%d", event.Balance)
+	case "claim-available":
+		if event.ClaimID != "" {
+			m.logf(login, "pubsub claim available: %s", event.ClaimID)
+			return
+		}
+		m.logf(login, "pubsub claim available")
+	case "stream-up":
+		m.logf(login, "pubsub stream up")
+	case "stream-down":
+		m.logf(login, "pubsub stream down")
+	case "viewcount":
+		m.logf(login, "pubsub viewcount heartbeat")
+	default:
+		m.logf(login, "pubsub %s", event.MessageType)
+	}
+}
+
+func (m *Manager) logf(login, format string, args ...any) {
+	if m.onLog == nil || login == "" {
+		return
+	}
+	m.onLog(LogEntry{
+		Login: login,
+		Line:  fmt.Sprintf(format, args...),
+	})
 }
 
 func (m *Manager) streamerForChannel(channelID string) (string, *streamerState) {

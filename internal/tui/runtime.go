@@ -136,7 +136,7 @@ func (r *runtime) startResolve(state *auth.State, ch chan<- StreamerUpdate) {
 			ch <- StreamerUpdate{Err: err, Done: true}
 			return
 		}
-		minerManager := miner.NewManager(r.ctx, service, nil)
+		minerManager := newMinerManager(r.ctx, service, ch)
 		defer minerManager.Close()
 
 		if err := resolveStreamerEntriesWithSleep(r.ctx, service, state, r.logins, ircManager, minerManager, func(update StreamerUpdate) {
@@ -205,6 +205,21 @@ func newIRCManager(ch chan<- StreamerUpdate) *irc.Manager {
 				},
 			}
 		},
+	}
+}
+
+func newMinerManager(ctx context.Context, service miner.Service, ch chan<- StreamerUpdate) *miner.Manager {
+	return miner.NewManager(ctx, service, nil, newMinerLogSink(ch))
+}
+
+func newMinerLogSink(ch chan<- StreamerUpdate) func(miner.LogEntry) {
+	return func(entry miner.LogEntry) {
+		ch <- StreamerUpdate{
+			Miner: &MinerUpdate{
+				Login: entry.Login,
+				Line:  entry.Line,
+			},
+		}
 	}
 }
 
