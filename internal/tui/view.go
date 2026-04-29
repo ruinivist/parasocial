@@ -32,11 +32,20 @@ func (m Model) renderAuthView() string {
 
 func (m Model) renderStreamerView() string {
 	header := m.renderDashboardHeader()
-	left := panelStyle.
+	leftStyle := panelStyle
+	rightStyle := panelStyle
+	if m.isStreamersFocused() {
+		leftStyle = focusedPanelStyle
+	}
+	if m.isRightPanelFocused() {
+		rightStyle = focusedPanelStyle
+	}
+
+	left := leftStyle.
 		Width(streamerListWidth(m.width)).
 		Height(panelHeight(m.height)).
 		Render(labelStyle.Render("Streamers") + "\n" + m.renderStreamerRows())
-	right := panelStyle.
+	right := rightStyle.
 		Width(detailWidth(m.width)).
 		Height(panelHeight(m.height)).
 		Render(m.renderDetailPanel())
@@ -66,38 +75,61 @@ func (m Model) renderDashboardHeader() string {
 }
 
 func (m Model) renderDetailPanel() string {
-	entries := m.orderedStreamers()
-	selected := m.selectedRowIndex(entries)
-	if selected < 0 || selected >= len(entries) {
-		return labelStyle.Render("IRC Chat") + "\n\n" + mutedStyle.Render("No streamers configured")
+	header := m.renderDetailTabs()
+	entry, ok := m.selectedEntry()
+	if !ok {
+		return header + "\n\n" + mutedStyle.Render("No streamers configured")
 	}
 
-	entry := entries[selected]
+	var body string
+	switch m.visibleDetailTab() {
+	case ircTab:
+		body = m.renderIRCTab()
+	default:
+		body = m.renderInfoTab(entry)
+	}
+	return header + "\n\n" + body
+}
+
+func (m Model) renderDetailTabs() string {
+	tabs := []string{
+		m.renderDetailTabButton(infoTab, "Info"),
+		m.renderDetailTabButton(ircTab, "IRC"),
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
+}
+
+func (m Model) renderDetailTabButton(tab detailTab, label string) string {
+	if m.visibleDetailTab() == tab {
+		return activeTabStyle.Render(" " + label + " ")
+	}
+	return inactiveTabStyle.Render(" " + label + " ")
+}
+
+func (m Model) renderInfoTab(entry twitch.StreamerEntry) string {
 	lines := []string{
-		labelStyle.Render("IRC Chat"),
-		"",
-		titleStyle.Render(streamerName(entry)),
 		"Status: " + statusText(entry),
 	}
-	if entry.Error != "" {
-		lines = append(lines, "Error: "+errorStyle.Render(entry.Error))
+	if entry.ChannelID != "" {
+		lines = append(lines, "Channel ID: "+entry.ChannelID)
 	}
 
+	detail := m.ircDetails[normalizeKey(entry.Login)]
 	if !isActive(entry) {
 		lines = append(lines, "IRC: "+mutedStyle.Render("inactive"))
 		return strings.Join(lines, "\n")
 	}
 
-	detail := m.ircDetails[normalizeKey(entry.Login)]
 	if detail.joined {
 		lines = append(lines, "IRC: "+accentStyle.Render("joined"))
 	} else {
 		lines = append(lines, "IRC: "+mutedStyle.Render("not joined"))
 	}
-	if detail.line != "" {
-		lines = append(lines, "", mutedStyle.Render(detail.line))
-	}
 	return strings.Join(lines, "\n")
+}
+
+func (m Model) renderIRCTab() string {
+	return m.ircViewport.View()
 }
 
 func (m Model) renderStreamerRows() string {
@@ -224,11 +256,22 @@ func detailWidth(width int) int {
 	return max(24, width-streamerListWidth(width)-11)
 }
 
+func detailViewportWidth(width int) int {
+	return max(16, detailWidth(width)-4)
+}
+
 func streamerListHeight(height int) int {
 	if height <= 0 {
 		return 14
 	}
 	return max(4, height-10)
+}
+
+func detailViewportHeight(height int) int {
+	if height <= 0 {
+		return 9
+	}
+	return max(4, panelHeight(height)-6)
 }
 
 func panelHeight(height int) int {

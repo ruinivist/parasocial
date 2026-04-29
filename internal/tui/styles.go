@@ -23,9 +23,18 @@ var (
 			Border(lipgloss.NormalBorder()).
 			BorderForeground(lipgloss.Color("#30363D")).
 			Padding(1, 2)
+	focusedPanelStyle = panelStyle.
+				BorderForeground(lipgloss.Color("#7CE38B"))
 	labelStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#8B949E")).
 			Bold(true)
+	activeTabStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#0D1117")).
+			Background(lipgloss.Color("#7CE38B"))
+	inactiveTabStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#8B949E")).
+				Background(lipgloss.Color("#1B1F24"))
 	statusLiveStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#7CE38B"))
 	statusIdleStyle = lipgloss.NewStyle().
@@ -48,6 +57,12 @@ var (
 )
 
 func newAuthViewport(width, height int) viewport.Model {
+	vp := viewport.New(width, height)
+	vp.Style = lipgloss.NewStyle()
+	return vp
+}
+
+func newIRCViewport(width, height int) viewport.Model {
 	vp := viewport.New(width, height)
 	vp.Style = lipgloss.NewStyle()
 	return vp

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -34,12 +35,13 @@ func TestViewDisplaysDashboardWithSelectedStreamerDetails(t *testing.T) {
 
 	assertContainsAll(t, model.View(),
 		"Watching: alpha_live, beta_live",
-		"alpha_live",
+		"Info",
+		"IRC",
 		"live | irc idle",
 		"gamma",
 		"loading",
-		"IRC Chat",
-		"not joined",
+		"Status: live",
+		"IRC: not joined",
 	)
 }
 
@@ -182,7 +184,80 @@ func TestUpDownNavigationMovesSelectedStreamer(t *testing.T) {
 	}
 }
 
-func TestIRCUpdatesShowJoinedStatusOnly(t *testing.T) {
+func TestFocusNavigationMovesBetweenPanels(t *testing.T) {
+	model := dashboardModel(twitch.StreamerEntry{
+		ConfigLogin: "alpha",
+		Login:       "alpha_live",
+		Live:        true,
+		Status:      twitch.StreamerReady,
+	})
+
+	if model.focus != focusStreamers {
+		t.Fatalf("initial focus = %v, want %v", model.focus, focusStreamers)
+	}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	next := updated.(Model)
+	if next.focus != focusInfo || next.visibleDetailTab() != infoTab {
+		t.Fatalf("focus after first right = %v with tab %v, want %v and %v", next.focus, next.visibleDetailTab(), focusInfo, infoTab)
+	}
+
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyRight})
+	next = updated.(Model)
+	if next.focus != focusChat || next.visibleDetailTab() != ircTab {
+		t.Fatalf("focus after second right = %v with tab %v, want %v and %v", next.focus, next.visibleDetailTab(), focusChat, ircTab)
+	}
+
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyRight})
+	next = updated.(Model)
+	if next.focus != focusChat {
+		t.Fatalf("focus after right on chat = %v, want %v", next.focus, focusChat)
+	}
+
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	next = updated.(Model)
+	if next.focus != focusInfo {
+		t.Fatalf("focus after left from chat = %v, want %v", next.focus, focusInfo)
+	}
+
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	next = updated.(Model)
+	if next.focus != focusStreamers {
+		t.Fatalf("focus after left from info = %v, want %v", next.focus, focusStreamers)
+	}
+
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	next = updated.(Model)
+	if next.focus != focusStreamers {
+		t.Fatalf("focus after left on streamers = %v, want %v", next.focus, focusStreamers)
+	}
+}
+
+func TestInfoFocusMakesUpDownNoop(t *testing.T) {
+	model := dashboardModel(
+		twitch.StreamerEntry{ConfigLogin: "alpha", Login: "alpha_live", Live: true, Status: twitch.StreamerReady},
+		twitch.StreamerEntry{ConfigLogin: "beta", Login: "beta_live", Status: twitch.StreamerReady},
+	)
+	model.focus = focusInfo
+	model.ircViewport.SetYOffset(0)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	next := updated.(Model)
+	if next.selectedConfig != "alpha" {
+		t.Fatalf("selectedConfig after down in info = %q, want alpha", next.selectedConfig)
+	}
+	if next.ircViewport.YOffset != 0 {
+		t.Fatalf("irc viewport offset after down in info = %d, want 0", next.ircViewport.YOffset)
+	}
+
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyUp})
+	next = updated.(Model)
+	if next.selectedConfig != "alpha" {
+		t.Fatalf("selectedConfig after up in info = %q, want alpha", next.selectedConfig)
+	}
+}
+
+func TestIRCUpdatesShowJoinedStatusAndFormattedMessages(t *testing.T) {
 	updated, _ := dashboardModel(twitch.StreamerEntry{
 		ConfigLogin: "alpha",
 		Login:       "alpha_live",
@@ -194,7 +269,147 @@ func TestIRCUpdatesShowJoinedStatusOnly(t *testing.T) {
 	if !next.ircDetails["alpha_live"].joined {
 		t.Fatal("expected joined detail")
 	}
-	assertContainsAll(t, next.View(), "joined")
+
+	updated, _ = next.Update(StreamerUpdate{IRC: &IRCUpdate{
+		Login: "alpha_live",
+		Line:  ":someone!someone@someone.tmi.twitch.tv PRIVMSG #alpha_live :hello there",
+	}})
+	next = updated.(Model)
+	next.focus = focusChat
+	next.syncIRCViewport(true)
+
+	assertContainsAll(t, next.View(), "someone: hello there")
+}
+
+func TestChatFocusUsesUpDownForViewportScroll(t *testing.T) {
+	model := dashboardModel(
+		twitch.StreamerEntry{ConfigLogin: "alpha", Login: "alpha_live", Live: true, Status: twitch.StreamerReady},
+		twitch.StreamerEntry{ConfigLogin: "beta", Login: "beta_live", Status: twitch.StreamerReady},
+	)
+	model.focus = focusChat
+	model.ircDetails["alpha_live"] = ircDetail{
+		joined:   true,
+		messages: numberedMessages(20),
+	}
+	model.syncIRCViewport(true)
+	model.ircViewport.GotoTop()
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	next := updated.(Model)
+	if next.selectedConfig != "alpha" {
+		t.Fatalf("selectedConfig after down in chat = %q, want alpha", next.selectedConfig)
+	}
+	if next.ircViewport.YOffset == 0 {
+		t.Fatal("expected chat viewport to scroll down")
+	}
+
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyUp})
+	next = updated.(Model)
+	if next.ircViewport.YOffset != 0 {
+		t.Fatalf("irc viewport offset after up in chat = %d, want 0", next.ircViewport.YOffset)
+	}
+}
+
+func TestIRCUpdatesKeepOnlyLast50ChatMessages(t *testing.T) {
+	model := dashboardModel(twitch.StreamerEntry{
+		ConfigLogin: "alpha",
+		Login:       "alpha_live",
+		Live:        true,
+		Status:      twitch.StreamerReady,
+	})
+
+	updated, _ := model.Update(StreamerUpdate{IRC: &IRCUpdate{Login: "alpha_live", State: IRCJoined}})
+	next := updated.(Model)
+	for i := 1; i <= maxIRCMessageHistory+5; i++ {
+		line := fmt.Sprintf(":user%d!user%d@user%d.tmi.twitch.tv PRIVMSG #alpha_live :message %d", i, i, i, i)
+		updated, _ = next.Update(StreamerUpdate{IRC: &IRCUpdate{Login: "alpha_live", Line: line}})
+		next = updated.(Model)
+	}
+
+	detail := next.ircDetails["alpha_live"]
+	if len(detail.messages) != maxIRCMessageHistory {
+		t.Fatalf("message count = %d, want %d", len(detail.messages), maxIRCMessageHistory)
+	}
+	if detail.messages[0] != "user6: message 6" {
+		t.Fatalf("oldest retained message = %q, want %q", detail.messages[0], "user6: message 6")
+	}
+	if detail.messages[len(detail.messages)-1] != "user55: message 55" {
+		t.Fatalf("newest retained message = %q, want %q", detail.messages[len(detail.messages)-1], "user55: message 55")
+	}
+}
+
+func TestIRCUpdatesIgnoreNonChatProtocolLines(t *testing.T) {
+	model := dashboardModel(twitch.StreamerEntry{
+		ConfigLogin: "alpha",
+		Login:       "alpha_live",
+		Live:        true,
+		Status:      twitch.StreamerReady,
+	})
+
+	updated, _ := model.Update(StreamerUpdate{IRC: &IRCUpdate{
+		Login: "alpha_live",
+		Line:  "Joined #alpha_live as viewer",
+	}})
+	next := updated.(Model)
+	if len(next.ircDetails["alpha_live"].messages) != 0 {
+		t.Fatalf("messages = %#v, want empty", next.ircDetails["alpha_live"].messages)
+	}
+}
+
+func TestIRCViewportAutoScrollsAtBottom(t *testing.T) {
+	model := dashboardModel(twitch.StreamerEntry{
+		ConfigLogin: "alpha",
+		Login:       "alpha_live",
+		Live:        true,
+		Status:      twitch.StreamerReady,
+	})
+	model.focus = focusChat
+	model.ircDetails["alpha_live"] = ircDetail{
+		joined:   true,
+		messages: numberedMessages(20),
+	}
+	model.syncIRCViewport(true)
+
+	if !model.ircViewport.AtBottom() {
+		t.Fatal("expected viewport to start at bottom")
+	}
+
+	updated, _ := model.Update(StreamerUpdate{IRC: &IRCUpdate{
+		Login: "alpha_live",
+		Line:  ":late!late@late.tmi.twitch.tv PRIVMSG #alpha_live :newest",
+	}})
+	next := updated.(Model)
+	if !next.ircViewport.AtBottom() {
+		t.Fatal("expected viewport to stay at bottom after new message")
+	}
+}
+
+func TestIRCViewportPreservesManualScrollPosition(t *testing.T) {
+	model := dashboardModel(twitch.StreamerEntry{
+		ConfigLogin: "alpha",
+		Login:       "alpha_live",
+		Live:        true,
+		Status:      twitch.StreamerReady,
+	})
+	model.focus = focusChat
+	model.ircDetails["alpha_live"] = ircDetail{
+		joined:   true,
+		messages: numberedMessages(20),
+	}
+	model.syncIRCViewport(true)
+	model.ircViewport.GotoTop()
+
+	updated, _ := model.Update(StreamerUpdate{IRC: &IRCUpdate{
+		Login: "alpha_live",
+		Line:  ":late!late@late.tmi.twitch.tv PRIVMSG #alpha_live :newest",
+	}})
+	next := updated.(Model)
+	if next.ircViewport.YOffset != 0 {
+		t.Fatalf("viewport YOffset = %d, want 0", next.ircViewport.YOffset)
+	}
+	if next.ircViewport.AtBottom() {
+		t.Fatal("expected viewport to remain off bottom after manual scroll")
+	}
 }
 
 func TestWindowSizeKeepsSelectionVisible(t *testing.T) {
@@ -216,7 +431,17 @@ func dashboardModel(entries ...twitch.StreamerEntry) Model {
 	model.viewer = &twitch.Viewer{ID: "7", Login: "viewer"}
 	model.width = 100
 	model.height = 28
+	model.resizeComponents()
+	model.syncIRCViewport(true)
 	return model
+}
+
+func numberedMessages(count int) []string {
+	lines := make([]string, 0, count)
+	for i := 1; i <= count; i++ {
+		lines = append(lines, fmt.Sprintf("user%d: message %d", i, i))
+	}
+	return lines
 }
 
 func assertContainsAll(t *testing.T, got string, wants ...string) {
