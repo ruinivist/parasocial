@@ -9,7 +9,10 @@ import (
 	"parasocial/internal/twitch"
 )
 
-const dashboardPanelGap = 1
+const (
+	dashboardPanelGap       = 1
+	detailPanelHeaderHeight = 2
+)
 
 // View renders either the login log screen or the authenticated streamer dashboard.
 func (m Model) View() string {
@@ -43,14 +46,16 @@ func (m Model) renderStreamerView() string {
 		rightStyle = focusedPanelStyle
 	}
 
+	leftContent := labelStyle.Render("Streamers") + "\n" + m.renderStreamerRows(streamerListHeight(m.height))
 	left := leftStyle.
 		Width(streamerListWidth(m.width)).
 		Height(panelHeight(m.height)).
-		Render(labelStyle.Render("Streamers") + "\n" + m.renderStreamerRows())
+		Render(leftContent)
+	rightContent := m.renderDetailPanel()
 	right := rightStyle.
 		Width(detailWidth(m.width)).
 		Height(panelHeight(m.height)).
-		Render(m.renderDetailPanel())
+		Render(rightContent)
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", dashboardPanelGap), right)
 	return dashboardPageStyle.Render(header+"\n\n"+body) + "\n"
@@ -142,8 +147,8 @@ func (m Model) renderMinerTab() string {
 	return m.minerViewport.View()
 }
 
-func (m Model) renderStreamerRows() string {
-	entries := m.visibleStreamers()
+func (m Model) renderStreamerRows(maxRows int) string {
+	entries := m.visibleStreamers(maxRows)
 	if len(entries) == 0 {
 		return mutedStyle.Render("none")
 	}
@@ -163,9 +168,9 @@ func (m Model) renderStreamerRows() string {
 	return strings.Join(lines, "\n")
 }
 
-func (m Model) visibleStreamers() []twitch.StreamerEntry {
+func (m Model) visibleStreamers(maxRows int) []twitch.StreamerEntry {
 	entries := m.orderedStreamers()
-	visible := max(1, streamerListHeight(m.height))
+	visible := max(1, maxRows)
 	if len(entries) <= visible {
 		return entries
 	}
@@ -276,17 +281,17 @@ func detailViewportWidth(width int) int {
 }
 
 func streamerListHeight(height int) int {
-	if height <= 0 {
-		return 14
-	}
-	return max(4, height-10)
+	return max(1, dashboardPanelContentHeight(height)-1)
 }
 
-func detailViewportHeight(height int) int {
-	if height <= 0 {
-		return 9
-	}
-	return max(4, panelHeight(height)-6)
+func detailViewportHeight(height int, content string) int {
+	contentHeight := max(1, lipgloss.Height(content))
+	maxBodyHeight := max(1, dashboardPanelContentHeight(height)-detailPanelHeaderHeight)
+	return max(1, min(contentHeight, maxBodyHeight))
+}
+
+func dashboardPanelContentHeight(height int) int {
+	return max(1, panelHeight(height)-panelStyle.GetVerticalPadding())
 }
 
 func panelHeight(height int) int {

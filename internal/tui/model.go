@@ -90,10 +90,10 @@ func New(options Options) Model {
 		height:       24,
 		focus:        focusStreamers,
 		authViewport: newAuthViewport(contentWidth(defaultViewWidth), authViewportHeight(24)),
-		ircViewport:  newIRCViewport(detailViewportWidth(defaultViewWidth), detailViewportHeight(24)),
+		ircViewport:  newIRCViewport(detailViewportWidth(defaultViewWidth), detailViewportHeight(24, "")),
 		minerViewport: newMinerViewport(
 			detailViewportWidth(defaultViewWidth),
-			detailViewportHeight(24),
+			detailViewportHeight(24, ""),
 		),
 	}
 	if options.AuthState != nil {
@@ -370,9 +370,9 @@ func (m *Model) resizeComponents() {
 	m.authViewport.Width = contentWidth(m.width)
 	m.authViewport.Height = authViewportHeight(m.height)
 	m.ircViewport.Width = detailViewportWidth(m.width)
-	m.ircViewport.Height = detailViewportHeight(m.height)
+	m.ircViewport.Height = detailViewportHeight(m.height, m.ircViewportContent())
 	m.minerViewport.Width = detailViewportWidth(m.width)
-	m.minerViewport.Height = detailViewportHeight(m.height)
+	m.minerViewport.Height = detailViewportHeight(m.height, m.minerViewportContent())
 }
 
 func (m *Model) syncAuthViewport() {
@@ -388,24 +388,30 @@ func (m Model) authLogContent() string {
 }
 
 func (m *Model) syncIRCViewport(forceBottom bool) {
+	stickToBottom := forceBottom || m.ircViewport.AtBottom()
+	content := m.ircViewportContent()
+	m.ircViewport.Width = detailViewportWidth(m.width)
+	m.ircViewport.Height = detailViewportHeight(m.height, content)
 	if m.ircViewport.Width <= 0 || m.ircViewport.Height <= 0 {
 		return
 	}
 
-	stickToBottom := forceBottom || m.ircViewport.AtBottom()
-	m.ircViewport.SetContent(m.ircViewportContent())
+	m.ircViewport.SetContent(content)
 	if stickToBottom {
 		m.ircViewport.GotoBottom()
 	}
 }
 
 func (m *Model) syncMinerViewport(forceBottom bool) {
+	stickToBottom := forceBottom || m.minerViewport.AtBottom()
+	content := m.minerViewportContent()
+	m.minerViewport.Width = detailViewportWidth(m.width)
+	m.minerViewport.Height = detailViewportHeight(m.height, content)
 	if m.minerViewport.Width <= 0 || m.minerViewport.Height <= 0 {
 		return
 	}
 
-	stickToBottom := forceBottom || m.minerViewport.AtBottom()
-	m.minerViewport.SetContent(m.minerViewportContent())
+	m.minerViewport.SetContent(content)
 	if stickToBottom {
 		m.minerViewport.GotoBottom()
 	}
