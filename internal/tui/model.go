@@ -61,6 +61,7 @@ type Model struct {
 	focus           panelFocus
 	ircDetails      map[string]ircDetail
 	minerDetails    map[string][]string
+	minerStatuses   map[string]MinerStatus
 	authViewport    viewport.Model
 	ircViewport     viewport.Model
 	minerViewport   viewport.Model
@@ -79,18 +80,19 @@ func New(options Options) Model {
 	}
 
 	model := Model{
-		streamers:    streamers,
-		authState:    options.AuthState,
-		runtime:      options.runtime,
-		authLogs:     []string{},
-		mode:         authView,
-		ircDetails:   make(map[string]ircDetail),
-		minerDetails: make(map[string][]string),
-		width:        defaultViewWidth,
-		height:       24,
-		focus:        focusStreamers,
-		authViewport: newAuthViewport(contentWidth(defaultViewWidth), authViewportHeight(24)),
-		ircViewport:  newIRCViewport(detailViewportWidth(defaultViewWidth), detailViewportHeight(24, "")),
+		streamers:     streamers,
+		authState:     options.AuthState,
+		runtime:       options.runtime,
+		authLogs:      []string{},
+		mode:          authView,
+		ircDetails:    make(map[string]ircDetail),
+		minerDetails:  make(map[string][]string),
+		minerStatuses: make(map[string]MinerStatus),
+		width:         defaultViewWidth,
+		height:        24,
+		focus:         focusStreamers,
+		authViewport:  newAuthViewport(contentWidth(defaultViewWidth), authViewportHeight(24)),
+		ircViewport:   newIRCViewport(detailViewportWidth(defaultViewWidth), detailViewportHeight(24, "")),
 		minerViewport: newMinerViewport(
 			detailViewportWidth(defaultViewWidth),
 			detailViewportHeight(24, ""),
@@ -204,6 +206,7 @@ func (m Model) updateAuth(msg AuthUpdate) (tea.Model, tea.Cmd) {
 			m.streamers = loadingEntries(m.streamers)
 			m.ircDetails = make(map[string]ircDetail)
 			m.minerDetails = make(map[string][]string)
+			m.minerStatuses = make(map[string]MinerStatus)
 			m.selectedConfig = ""
 			m.focus = focusStreamers
 			m.ensureSelection()
@@ -269,11 +272,16 @@ func (m *Model) applyIRCUpdate(update IRCUpdate) {
 
 func (m *Model) applyMinerUpdate(update MinerUpdate) {
 	login := normalizeKey(update.Login)
-	line := strings.TrimSpace(update.Line)
-	if login == "" || line == "" {
+	if login == "" {
 		return
 	}
-	m.minerDetails[login] = appendCappedHistory(m.minerDetails[login], line)
+	if update.Status != nil {
+		m.minerStatuses[login] = *update.Status
+	}
+	line := strings.TrimSpace(update.Line)
+	if line != "" {
+		m.minerDetails[login] = appendCappedHistory(m.minerDetails[login], line)
+	}
 }
 
 func (m *Model) ensureSelection() {

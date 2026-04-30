@@ -14,6 +14,18 @@ func TestParseFramePointsEarned(t *testing.T) {
 	}
 }
 
+func TestParseFramePointsEarnedPointGain(t *testing.T) {
+	t.Parallel()
+
+	frame, err := parseFrame([]byte(`{"type":"MESSAGE","data":{"topic":"community-points-user-v1.viewer","message":"{\"type\":\"points-earned\",\"data\":{\"timestamp\":\"2026-04-29T12:00:00Z\",\"balance\":{\"balance\":42,\"channel_id\":\"123\"},\"point_gain\":{\"reason_code\":\"WATCH_STREAK\",\"total_points\":450}}}"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Event.ReasonCode != "WATCH_STREAK" || frame.Event.TotalPoints != 450 {
+		t.Fatalf("event = %#v", frame.Event)
+	}
+}
+
 func TestParseFrameClaimAvailable(t *testing.T) {
 	t.Parallel()
 

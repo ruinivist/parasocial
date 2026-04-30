@@ -5,14 +5,15 @@ package twitch
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
-	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"parasocial/internal/gql"
@@ -25,7 +26,7 @@ const (
 )
 
 var (
-	defaultPageURL      = "https://www.twitch.tv/"
+	defaultPageURL       = "https://www.twitch.tv/"
 	settingsAssetPattern = regexp.MustCompile(spadeSettingsRegex)
 	spadeURLPattern      = regexp.MustCompile(spadeURLRegex)
 )
@@ -124,12 +125,14 @@ const (
 
 // StreamerEntry is the UI-facing state for one configured streamer.
 type StreamerEntry struct {
-	ConfigLogin string
-	Login       string
-	ChannelID   string
-	Live        bool
-	Status      StreamerStatus
-	Error       string
+	ConfigLogin      string
+	Login            string
+	ChannelID        string
+	Live             bool
+	Status           StreamerStatus
+	Error            string
+	WatchStreak      *int
+	WatchStreakError string
 }
 
 // ErrStreamerNotFound is returned when Twitch has no channel for the requested login.
@@ -256,6 +259,41 @@ func (s *Service) LoadChannelPointsContext(ctx context.Context, login string) (*
 		context.ClaimID = claim.ID
 	}
 	return context, nil
+}
+
+// WatchStreak fetches the authenticated viewer's current watch streak for one streamer.
+func (s *Service) WatchStreak(ctx context.Context, login string) (*int, error) {
+	var data struct {
+		User *struct {
+			Channel *struct {
+				Self *struct {
+					ViewerMilestones []struct {
+						ID       string `json:"id"`
+						Category string `json:"category"`
+						Value    string `json:"value"`
+					} `json:"viewerMilestones"`
+				} `json:"self"`
+			} `json:"channel"`
+		} `json:"user"`
+	}
+	if err := s.GQL.Do(ctx, gql.WatchStreak(login), &data); err != nil {
+		return nil, err
+	}
+	if data.User == nil || data.User.Channel == nil || data.User.Channel.Self == nil {
+		return nil, fmt.Errorf("watch streak missing viewer milestones for %s", login)
+	}
+	for _, milestone := range data.User.Channel.Self.ViewerMilestones {
+		if milestone.Category != "WATCH_STREAK" {
+			continue
+		}
+		value, err := strconv.Atoi(strings.TrimSpace(milestone.Value))
+		if err != nil {
+			return nil, fmt.Errorf("parse watch streak for %s: %w", login, err)
+		}
+		return &value, nil
+	}
+	value := 0
+	return &value, nil
 }
 
 // ClaimCommunityPoints claims one available channel points bonus chest.

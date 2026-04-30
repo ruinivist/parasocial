@@ -128,6 +128,141 @@ func TestViewDisplaysInactiveDetailForOfflineStreamer(t *testing.T) {
 	assertContainsAll(t, model.View(), "offline", "inactive")
 }
 
+func TestInfoTabShowsFetchingWatchStreak(t *testing.T) {
+	model := dashboardModel(twitch.StreamerEntry{ConfigLogin: "alpha", Login: "alpha_live", Status: twitch.StreamerReady})
+	entry, ok := model.selectedEntry()
+	if !ok {
+		t.Fatal("expected selected entry")
+	}
+	assertLastInfoLine(t, model.renderInfoTab(entry), "Watch streak: fetching")
+}
+
+func TestInfoTabShowsFetchedWatchStreak(t *testing.T) {
+	streak := 3
+	model := dashboardModel(twitch.StreamerEntry{
+		ConfigLogin: "alpha",
+		Login:       "alpha_live",
+		Live:        true,
+		Status:      twitch.StreamerReady,
+		WatchStreak: &streak,
+	})
+	entry, ok := model.selectedEntry()
+	if !ok {
+		t.Fatal("expected selected entry")
+	}
+	assertLastInfoLine(t, model.renderInfoTab(entry), "Watch streak: 3")
+}
+
+func TestInfoTabShowsUnavailableWatchStreak(t *testing.T) {
+	model := dashboardModel(twitch.StreamerEntry{
+		ConfigLogin:      "alpha",
+		Login:            "alpha_live",
+		Live:             true,
+		Status:           twitch.StreamerReady,
+		WatchStreakError: "lookup failed",
+	})
+	entry, ok := model.selectedEntry()
+	if !ok {
+		t.Fatal("expected selected entry")
+	}
+	assertLastInfoLine(t, model.renderInfoTab(entry), "Watch streak: unavailable")
+}
+
+func TestInfoTabShowsWatchStreakMinerStatus(t *testing.T) {
+	streak := 3
+	model := dashboardModel(twitch.StreamerEntry{
+		ConfigLogin: "alpha",
+		Login:       "alpha_live",
+		Live:        true,
+		Status:      twitch.StreamerReady,
+		WatchStreak: &streak,
+	})
+	updated, _ := model.Update(StreamerUpdate{Miner: &MinerUpdate{
+		Login: "alpha_live",
+		Status: &MinerStatus{
+			Watching:       true,
+			Reason:         "watchstreak",
+			WatchedMinutes: 4,
+		},
+	}})
+	next := updated.(Model)
+	entry, ok := next.selectedEntry()
+	if !ok {
+		t.Fatal("expected selected entry")
+	}
+	info := next.renderInfoTab(entry)
+	assertContainsAll(t, info, "Watching for watchstreak", "Watched for 4 minutes so far")
+	assertNotContains(t, info, "Watching for watchstreak (4 mins so far)")
+	assertLastInfoLine(t, info, "Watched for 4 minutes so far")
+}
+
+func TestInfoTabShowsPointsMinerStatus(t *testing.T) {
+	streak := 3
+	minerStreak := 4
+	model := dashboardModel(twitch.StreamerEntry{
+		ConfigLogin: "alpha",
+		Login:       "alpha_live",
+		Live:        true,
+		Status:      twitch.StreamerReady,
+		WatchStreak: &streak,
+	})
+	updated, _ := model.Update(StreamerUpdate{Miner: &MinerUpdate{
+		Login: "alpha_live",
+		Status: &MinerStatus{
+			Watching:       true,
+			Reason:         "points",
+			WatchedMinutes: 6,
+			WatchStreak:    &minerStreak,
+		},
+	}})
+	next := updated.(Model)
+	entry, ok := next.selectedEntry()
+	if !ok {
+		t.Fatal("expected selected entry")
+	}
+	info := next.renderInfoTab(entry)
+	assertContainsAll(t, info, "Watch streak: 4", "Watching for points", "Watched for 6 minutes so far")
+	assertLastInfoLine(t, info, "Watched for 6 minutes so far")
+}
+
+func TestInfoTabOmitsMinerStatusWhenInactiveOrUnwatched(t *testing.T) {
+	streak := 3
+	model := dashboardModel(twitch.StreamerEntry{
+		ConfigLogin: "alpha",
+		Login:       "alpha_live",
+		Status:      twitch.StreamerReady,
+		WatchStreak: &streak,
+	})
+	updated, _ := model.Update(StreamerUpdate{Miner: &MinerUpdate{
+		Login: "alpha_live",
+		Status: &MinerStatus{
+			Watching: true,
+			Reason:   "points",
+		},
+	}})
+	next := updated.(Model)
+	entry, ok := next.selectedEntry()
+	if !ok {
+		t.Fatal("expected selected entry")
+	}
+	assertNotContains(t, next.renderInfoTab(entry), "Watching for")
+	assertNotContains(t, next.renderInfoTab(entry), "Watched for")
+
+	next = dashboardModel(twitch.StreamerEntry{
+		ConfigLogin: "alpha",
+		Login:       "alpha_live",
+		Live:        true,
+		Status:      twitch.StreamerReady,
+		WatchStreak: &streak,
+	})
+	entry, ok = next.selectedEntry()
+	if !ok {
+		t.Fatal("expected selected entry")
+	}
+	assertNotContains(t, next.renderInfoTab(entry), "Watching for")
+	assertNotContains(t, next.renderInfoTab(entry), "Watched for")
+}
+
 func assertInOrder(t *testing.T, value string, parts ...string) {
 	t.Helper()
 
@@ -587,5 +722,20 @@ func assertContainsAll(t *testing.T, got string, wants ...string) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
+	}
+}
+
+func assertNotContains(t *testing.T, got string, want string) {
+	t.Helper()
+	if strings.Contains(got, want) {
+		t.Fatalf("unexpected %q in:\n%s", want, got)
+	}
+}
+
+func assertLastInfoLine(t *testing.T, got, want string) {
+	t.Helper()
+	lines := strings.Split(got, "\n")
+	if len(lines) == 0 || lines[len(lines)-1] != want {
+		t.Fatalf("last line = %q in:\n%s", lines[len(lines)-1], got)
 	}
 }

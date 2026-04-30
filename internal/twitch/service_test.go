@@ -146,6 +146,51 @@ func TestLoadChannelPointsContext(t *testing.T) {
 	}
 }
 
+func TestWatchStreakParsesMilestoneValue(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeGQL{data: map[string]string{
+		"WatchStreak": `{"user":{"channel":{"self":{"viewerMilestones":[{"id":"1","category":"WATCH_STREAK","value":"12"}]}}}}`,
+	}}
+	service := &Service{GQL: client}
+	streak, err := service.WatchStreak(context.Background(), "streamer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if streak == nil || *streak != 12 {
+		t.Fatalf("streak = %#v, want 12", streak)
+	}
+}
+
+func TestWatchStreakReturnsZeroWhenMilestoneMissing(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeGQL{data: map[string]string{
+		"WatchStreak": `{"user":{"channel":{"self":{"viewerMilestones":[{"id":"1","category":"OTHER","value":"12"}]}}}}`,
+	}}
+	service := &Service{GQL: client}
+	streak, err := service.WatchStreak(context.Background(), "streamer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if streak == nil || *streak != 0 {
+		t.Fatalf("streak = %#v, want 0", streak)
+	}
+}
+
+func TestWatchStreakMalformedValueErrors(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeGQL{data: map[string]string{
+		"WatchStreak": `{"user":{"channel":{"self":{"viewerMilestones":[{"id":"1","category":"WATCH_STREAK","value":"many"}]}}}}`,
+	}}
+	service := &Service{GQL: client}
+	_, err := service.WatchStreak(context.Background(), "streamer")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestClaimCommunityPoints(t *testing.T) {
 	t.Parallel()
 

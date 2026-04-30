@@ -28,6 +28,8 @@ type Event struct {
 	Timestamp   string
 	Balance     int
 	ClaimID     string
+	ReasonCode  string
+	TotalPoints int
 }
 
 func (e Event) key() string {
@@ -291,6 +293,10 @@ func parseFrame(message []byte) (*frame, error) {
 				Balance   int    `json:"balance"`
 				ChannelID string `json:"channel_id"`
 			} `json:"balance"`
+			PointGain *struct {
+				ReasonCode  string `json:"reason_code"`
+				TotalPoints int    `json:"total_points"`
+			} `json:"point_gain"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(envelope.Data.Message), &payload); err != nil {
@@ -319,6 +325,10 @@ func parseFrame(message []byte) (*frame, error) {
 	}
 	if payload.Data.Claim != nil {
 		result.Event.ClaimID = payload.Data.Claim.ID
+	}
+	if payload.Data.PointGain != nil {
+		result.Event.ReasonCode = payload.Data.PointGain.ReasonCode
+		result.Event.TotalPoints = payload.Data.PointGain.TotalPoints
 	}
 	return result, nil
 }

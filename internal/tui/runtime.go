@@ -156,6 +156,7 @@ type streamerService interface {
 	CurrentUser(context.Context) (*twitch.Viewer, error)
 	ResolveStreamer(context.Context, string) (*twitch.Channel, error)
 	StreamInfo(context.Context, string) (*twitch.StreamInfo, error)
+	WatchStreak(context.Context, string) (*int, error)
 	PlaybackAccessToken(context.Context, string) (*twitch.PlaybackToken, error)
 	LoadChannelPointsContext(context.Context, string) (*twitch.ChannelPointsContext, error)
 	ClaimCommunityPoints(context.Context, string, string) error
@@ -209,7 +210,9 @@ func newIRCManager(ch chan<- StreamerUpdate) *irc.Manager {
 }
 
 func newMinerManager(ctx context.Context, service miner.Service, ch chan<- StreamerUpdate) *miner.Manager {
-	return miner.NewManager(ctx, service, nil, newMinerLogSink(ch))
+	manager := miner.NewManager(ctx, service, nil, newMinerLogSink(ch))
+	manager.SetStatusSink(newMinerStatusSink(ch))
+	return manager
 }
 
 func newMinerLogSink(ch chan<- StreamerUpdate) func(miner.LogEntry) {
@@ -218,6 +221,23 @@ func newMinerLogSink(ch chan<- StreamerUpdate) func(miner.LogEntry) {
 			Miner: &MinerUpdate{
 				Login: entry.Login,
 				Line:  entry.Line,
+			},
+		}
+	}
+}
+
+func newMinerStatusSink(ch chan<- StreamerUpdate) func(miner.StatusEntry) {
+	return func(entry miner.StatusEntry) {
+		ch <- StreamerUpdate{
+			Miner: &MinerUpdate{
+				Login: entry.Login,
+				Status: &MinerStatus{
+					Watching:           entry.Watching,
+					Reason:             string(entry.Reason),
+					WatchedMinutes:     entry.WatchedMinutes,
+					WatchStreakMinutes: entry.WatchStreakMinutes,
+					WatchStreak:        cloneInt(entry.WatchStreak),
+				},
 			},
 		}
 	}
@@ -275,6 +295,16 @@ func resolveStreamerEntry(ctx context.Context, service streamerService, login st
 		return entry, nil
 	}
 
+	watchStreak, err := service.WatchStreak(ctx, channel.Login)
+	switch {
+	case err == nil:
+		entry.WatchStreak = watchStreak
+	case errors.Is(err, context.Canceled):
+		return nil, err
+	default:
+		entry.WatchStreakError = err.Error()
+	}
+
 	stream, err := service.StreamInfo(ctx, channel.ID)
 	switch {
 	case err == nil:
@@ -330,4 +360,12 @@ func watchedIRCTargets(entries []twitch.StreamerEntry) []irc.Target {
 		}
 	}
 	return targets
+}
+
+func cloneInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }

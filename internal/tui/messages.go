@@ -42,8 +42,18 @@ type IRCUpdate struct {
 
 // MinerUpdate carries one miner log line into the TUI.
 type MinerUpdate struct {
-	Login string
-	Line  string
+	Login  string
+	Line   string
+	Status *MinerStatus
+}
+
+// MinerStatus carries the current active watch state for one streamer.
+type MinerStatus struct {
+	Watching           bool
+	Reason             string
+	WatchedMinutes     int
+	WatchStreakMinutes int
+	WatchStreak        *int
 }
 
 type authStartedMsg struct {

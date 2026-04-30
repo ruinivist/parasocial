@@ -128,6 +128,8 @@ func (m Model) renderInfoTab(entry twitch.StreamerEntry) string {
 	detail := m.ircDetails[normalizeKey(entry.Login)]
 	if !isActive(entry) {
 		lines = append(lines, "Chat: "+mutedStyle.Render("inactive"))
+		lines = append(lines, m.watchStreakText(entry))
+		lines = append(lines, m.minerWatchingLines(entry)...)
 		return strings.Join(lines, "\n")
 	}
 
@@ -136,6 +138,8 @@ func (m Model) renderInfoTab(entry twitch.StreamerEntry) string {
 	} else {
 		lines = append(lines, "Chat: "+mutedStyle.Render("not joined"))
 	}
+	lines = append(lines, m.watchStreakText(entry))
+	lines = append(lines, m.minerWatchingLines(entry)...)
 	return strings.Join(lines, "\n")
 }
 
@@ -219,6 +223,50 @@ func statusText(entry twitch.StreamerEntry) string {
 		return mutedStyle.Render("offline")
 	}
 }
+
+func (m Model) watchStreakText(entry twitch.StreamerEntry) string {
+	if status, ok := m.minerStatuses[normalizeKey(entry.Login)]; ok && status.WatchStreak != nil {
+		return fmt.Sprintf("Watch streak: %d", *status.WatchStreak)
+	}
+	switch {
+	case entry.WatchStreak != nil:
+		return fmt.Sprintf("Watch streak: %d", *entry.WatchStreak)
+	case entry.WatchStreakError != "":
+		return "Watch streak: unavailable"
+	default:
+		return "Watch streak: fetching"
+	}
+}
+
+func (m Model) minerWatchingLines(entry twitch.StreamerEntry) []string {
+	if !isActive(entry) {
+		return nil
+	}
+	status, ok := m.minerStatuses[normalizeKey(entry.Login)]
+	if !ok || !status.Watching {
+		return nil
+	}
+	var reason string
+	switch status.Reason {
+	case string(minerWatchReasonStreak):
+		reason = "Watching for watchstreak"
+	case string(minerWatchReasonPoints):
+		reason = "Watching for points"
+	default:
+		return nil
+	}
+	return []string{
+		reason,
+		fmt.Sprintf("Watched for %d minutes so far", status.WatchedMinutes),
+	}
+}
+
+type minerWatchReason string
+
+const (
+	minerWatchReasonStreak minerWatchReason = "watchstreak"
+	minerWatchReasonPoints minerWatchReason = "points"
+)
 
 func rawStatus(entry twitch.StreamerEntry) string {
 	switch {

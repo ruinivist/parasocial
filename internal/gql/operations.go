@@ -95,6 +95,15 @@ func ChannelPointsContext(login string) Request {
 	})
 }
 
+// WatchStreak fetches the authenticated viewer's watch-streak milestone for one streamer.
+func WatchStreak(login string) Request {
+	return queryOperation(
+		"WatchStreak",
+		`query WatchStreak($login: String!) { user(login: $login) { channel { self { viewerMilestones { id category value } } } } }`,
+		map[string]any{"login": login},
+	)
+}
+
 // ClaimCommunityPoints claims an available channel points bonus chest.
 func ClaimCommunityPoints(channelID, claimID string) Request {
 	return operation("ClaimCommunityPoints", "46aaeebe02c99afdf4fc97c7c0cba964124bf6b0af229395f1f6d1feed05b3d0", map[string]any{

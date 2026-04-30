@@ -18,6 +18,7 @@ type fakeStreamerService struct {
 	resolveErrs map[string]error
 	streams     map[string][]streamResult
 	streamCalls map[string]int
+	streaks     map[string]watchStreakResult
 	playbackErr map[string]error
 }
 
@@ -51,6 +52,18 @@ func (f *fakeStreamerService) StreamInfo(_ context.Context, channelID string) (*
 		return nil, results[call].err
 	}
 	return results[call].info, nil
+}
+
+func (f *fakeStreamerService) WatchStreak(_ context.Context, login string) (*int, error) {
+	result, ok := f.streaks[login]
+	if !ok {
+		value := 0
+		return &value, nil
+	}
+	if result.err != nil {
+		return nil, result.err
+	}
+	return &result.value, nil
 }
 
 func (f *fakeStreamerService) PlaybackAccessToken(_ context.Context, login string) (*twitch.PlaybackToken, error) {
@@ -145,6 +158,35 @@ func TestResolveStreamerEntriesPlaybackFailureStillMarksLive(t *testing.T) {
 	}
 }
 
+func TestResolveStreamerEntriesWatchStreakFailureStillMarksLive(t *testing.T) {
+	updates := collectUpdates(t, streamService(
+		channel("alpha", "1", "alpha_live"),
+		live("1", true),
+		watchStreakErr("alpha_live", errors.New("watch streak failed")),
+	), []string{"alpha"}, nil, nil, cancelAfter(0))
+
+	entry := updates[1].Entry
+	if entry == nil || entry.Status != twitch.StreamerReady || !entry.Live {
+		t.Fatalf("entry = %#v", entry)
+	}
+	if entry.WatchStreakError == "" {
+		t.Fatalf("entry = %#v, want watch streak error", entry)
+	}
+}
+
+func TestResolveStreamerEntriesStoresWatchStreak(t *testing.T) {
+	updates := collectUpdates(t, streamService(
+		channel("alpha", "1", "alpha_live"),
+		live("1", false),
+		watchStreak("alpha_live", 9),
+	), []string{"alpha"}, nil, nil, cancelAfter(0))
+
+	entry := updates[1].Entry
+	if entry == nil || entry.WatchStreak == nil || *entry.WatchStreak != 9 {
+		t.Fatalf("entry = %#v, want watch streak 9", entry)
+	}
+}
+
 func TestResolveStreamerEntriesRefreshesLiveState(t *testing.T) {
 	updates := collectUpdates(t, streamService(
 		channel("alpha", "1", "alpha_live"),
@@ -226,12 +268,18 @@ func TestNewMinerLogSinkBridgesMinerEntriesIntoStreamerUpdates(t *testing.T) {
 
 type serviceOption func(*fakeStreamerService)
 
+type watchStreakResult struct {
+	value int
+	err   error
+}
+
 func streamService(options ...serviceOption) *fakeStreamerService {
 	service := &fakeStreamerService{
 		channels:    map[string]*twitch.Channel{},
 		resolveErrs: map[string]error{},
 		streams:     map[string][]streamResult{},
 		streamCalls: map[string]int{},
+		streaks:     map[string]watchStreakResult{},
 		playbackErr: map[string]error{},
 	}
 	for _, option := range options {
@@ -267,6 +315,18 @@ func streams(channelID string, online ...bool) serviceOption {
 func playbackErr(login string, err error) serviceOption {
 	return func(service *fakeStreamerService) {
 		service.playbackErr[login] = err
+	}
+}
+
+func watchStreak(login string, value int) serviceOption {
+	return func(service *fakeStreamerService) {
+		service.streaks[login] = watchStreakResult{value: value}
+	}
+}
+
+func watchStreakErr(login string, err error) serviceOption {
+	return func(service *fakeStreamerService) {
+		service.streaks[login] = watchStreakResult{err: err}
 	}
 }
 
