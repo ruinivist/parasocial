@@ -9,6 +9,8 @@ import (
 	"parasocial/internal/twitch"
 )
 
+const dashboardPanelGap = 1
+
 // View renders either the login log screen or the authenticated streamer dashboard.
 func (m Model) View() string {
 	if m.mode == authView {
@@ -50,8 +52,8 @@ func (m Model) renderStreamerView() string {
 		Height(panelHeight(m.height)).
 		Render(m.renderDetailPanel())
 
-	body := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
-	return pageStyle.Render(header+"\n\n"+body) + "\n"
+	body := lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", dashboardPanelGap), right)
+	return dashboardPageStyle.Render(header+"\n\n"+body) + "\n"
 }
 
 func (m Model) renderDashboardHeader() string {
@@ -259,13 +261,18 @@ func streamerListWidth(width int) int {
 
 func detailWidth(width int) int {
 	if width <= 0 {
-		return defaultViewWidth - streamerListWidth(width) - 7
+		width = defaultViewWidth
 	}
-	return max(24, width-streamerListWidth(width)-11)
+	usedWidth := dashboardPageStyle.GetHorizontalPadding() +
+		streamerListWidth(width) +
+		panelStyle.GetHorizontalBorderSize() +
+		dashboardPanelGap +
+		panelStyle.GetHorizontalBorderSize()
+	return max(24, width-usedWidth)
 }
 
 func detailViewportWidth(width int) int {
-	return max(16, detailWidth(width)-4)
+	return max(16, detailWidth(width)-panelStyle.GetHorizontalPadding())
 }
 
 func streamerListHeight(height int) int {

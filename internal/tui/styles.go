@@ -20,6 +20,8 @@ var (
 var (
 	pageStyle = lipgloss.NewStyle().
 			Padding(1, 2)
+	dashboardPageStyle = lipgloss.NewStyle().
+				Padding(1, 1)
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(titleColor)
