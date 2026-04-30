@@ -1,0 +1,101 @@
+version: 2
+
+project_name: parasocial
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: parasocial
+    main: ./cmd/parasocial
+    binary: parasocial
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      - goos: darwin
+        goarch: arm
+      - goos: windows
+        goarch: arm
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -buildid=
+
+source:
+  enabled: true
+  name_template: "{{ .ProjectName }}_{{ .Version }}_source"
+  format: tar.gz
+  prefix_template: "{{ .ProjectName }}_{{ .Version }}/"
+
+archives:
+  - id: parasocial
+    ids:
+      - parasocial
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+release:
+  github:
+    owner: ruinivist
+    name: parasocial
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+aur_sources:
+  - name: parasocial
+    homepage: "https://github.com/ruinivist/parasocial"
+    description: "A CLI-only lightweight Twitch channel points miner."
+    maintainers:
+      - "ruinivist <ruinivist@proton.me>"
+    license: "MIT"
+    private_key: "{{ .Env.AUR_KEY }}"
+    git_url: "ssh://aur@aur.archlinux.org/parasocial.git"
+    skip_upload: auto
+    disable: "{{ .IsSnapshot }}"
+    provides:
+      - parasocial
+    conflicts:
+      - parasocial
+    makedepends:
+      - go
+      - git
+    build: |-
+      cd "${pkgname}_${pkgver}"
+      export CGO_ENABLED=0
+      export GOFLAGS="-trimpath -mod=readonly -modcacherw"
+      go build -ldflags="-s -w -buildid=" -o parasocial ./cmd/parasocial
+    package: |-
+      cd "${pkgname}_${pkgver}"
+      install -Dm755 ./parasocial "${pkgdir}/usr/bin/parasocial"
+      install -Dm644 ./LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+    commit_msg_template: "Update {{ .ProjectName }} to {{ .Tag }}"
