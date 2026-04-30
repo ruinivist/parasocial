@@ -62,6 +62,7 @@ release:
   github:
     owner: ruinivist
     name: parasocial
+  replace_existing_artifacts: true
 
 changelog:
   sort: asc
