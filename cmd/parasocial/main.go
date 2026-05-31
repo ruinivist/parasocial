@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -16,10 +17,13 @@ import (
 
 // main sets up process cancellation and reports fatal startup errors to stderr.
 func main() {
+	daemon := flag.Bool("daemon", false, "run as daemon without interactive TUI")
+	flag.Parse()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := app.Run(ctx); err != nil {
+	if err := app.Run(ctx, *daemon); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return
 		}
