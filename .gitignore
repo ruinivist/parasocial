@@ -2,3 +2,4 @@ config.toml
 cookies.json
 dist/
 .DS_Store
+parasocial

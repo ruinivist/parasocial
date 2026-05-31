@@ -9,10 +9,13 @@ import (
 )
 
 // Run loads configuration and starts the terminal UI.
-func Run(ctx context.Context) error {
+func Run(ctx context.Context, daemon bool) error {
 	cfg, err := config.LoadDefault()
 	if err != nil {
 		return err
+	}
+	if daemon {
+		return tui.RunDaemon(ctx, tui.Options{Streamers: cfg.Streamers})
 	}
 	return tui.Run(ctx, tui.Options{Streamers: cfg.Streamers})
 }
