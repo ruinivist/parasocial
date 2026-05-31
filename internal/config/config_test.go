@@ -73,3 +73,19 @@ func writeConfig(t *testing.T, content string) string {
 	}
 	return path
 }
+
+func BenchmarkNormalizeStreamers(b *testing.B) {
+	streamers := []string{"  StreamerOne  ", "streamerTwo", "", "streamerOne", "https://twitch.tv/streamerThree"}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = normalizeStreamers(streamers)
+	}
+}
+
+func BenchmarkNormalizeStreamer(b *testing.B) {
+	streamer := "  https://www.twitch.tv/StreamerName  "
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = normalizeStreamer(streamer)
+	}
+}

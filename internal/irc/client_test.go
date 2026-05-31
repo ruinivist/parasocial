@@ -221,3 +221,19 @@ func TestAuthFailureReturnsError(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func BenchmarkPingPayload(b *testing.B) {
+	line := "PING :tmi.twitch.tv"
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = pingPayload(line)
+	}
+}
+
+func BenchmarkIsJoinConfirmation(b *testing.B) {
+	line := ":jules!jules@jules.tmi.twitch.tv JOIN #parasocial"
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = isJoinConfirmation(line, "jules", "parasocial")
+	}
+}

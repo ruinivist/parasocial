@@ -157,3 +157,15 @@ func TestPersistedOperationHashes(t *testing.T) {
 		t.Fatalf("stream info hash = %q", got)
 	}
 }
+
+func BenchmarkFormatErrors(b *testing.B) {
+	errs := []Error{
+		{Message: "first error"},
+		{Message: "second error"},
+		{Message: "third error"},
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = formatErrors(errs)
+	}
+}

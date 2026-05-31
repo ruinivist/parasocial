@@ -323,3 +323,17 @@ func containsLine(lines []string, want string) bool {
 	}
 	return false
 }
+
+func BenchmarkHasScope(b *testing.B) {
+	scopes := []string{"chat:read", "chat:edit", "whispers:read", "user:read:email"}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = hasScope(scopes, "whispers:read")
+	}
+}
+
+func BenchmarkRandomAlphaNumeric(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, _ = randomAlphaNumeric(32)
+	}
+}
