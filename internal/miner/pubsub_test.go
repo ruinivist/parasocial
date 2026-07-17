@@ -21,7 +21,7 @@ func TestParseFramePointsEarnedPointGain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if frame.Event.ReasonCode != "WATCH_STREAK" || frame.Event.TotalPoints != 450 {
+	if frame.Event.ReasonCode != "WATCH_STREAK" {
 		t.Fatalf("event = %#v", frame.Event)
 	}
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"parasocial/internal/miner"
 	"parasocial/internal/twitch"
 )
 
@@ -39,10 +40,10 @@ func (m Model) renderStreamerView() string {
 	header := m.renderDashboardHeader()
 	leftStyle := panelStyle
 	rightStyle := panelStyle
-	if m.isStreamersFocused() {
+	if m.focus == focusStreamers {
 		leftStyle = focusedPanelStyle
 	}
-	if m.isRightPanelFocused() {
+	if m.focus != focusStreamers {
 		rightStyle = focusedPanelStyle
 	}
 
@@ -91,9 +92,9 @@ func (m Model) renderDetailPanel() string {
 	var body string
 	switch m.visibleDetailTab() {
 	case ircTab:
-		body = m.renderIRCTab()
+		body = m.ircViewport.View()
 	case minerTab:
-		body = m.renderMinerTab()
+		body = m.minerViewport.View()
 	default:
 		body = m.renderInfoTab(entry)
 	}
@@ -141,14 +142,6 @@ func (m Model) renderInfoTab(entry twitch.StreamerEntry) string {
 	lines = append(lines, m.watchStreakText(entry))
 	lines = append(lines, m.minerWatchingLines(entry)...)
 	return strings.Join(lines, "\n")
-}
-
-func (m Model) renderIRCTab() string {
-	return m.ircViewport.View()
-}
-
-func (m Model) renderMinerTab() string {
-	return m.minerViewport.View()
 }
 
 func (m Model) renderStreamerRows(maxRows int) string {
@@ -248,9 +241,9 @@ func (m Model) minerWatchingLines(entry twitch.StreamerEntry) []string {
 	}
 	var reason string
 	switch status.Reason {
-	case string(minerWatchReasonStreak):
+	case miner.WatchReasonStreak:
 		reason = "Watching for watchstreak"
-	case string(minerWatchReasonPoints):
+	case miner.WatchReasonPoints:
 		reason = "Watching for points"
 	default:
 		return nil
@@ -259,33 +252,6 @@ func (m Model) minerWatchingLines(entry twitch.StreamerEntry) []string {
 		reason,
 		fmt.Sprintf("Watched for %d minutes so far", status.WatchedMinutes),
 	}
-}
-
-type minerWatchReason string
-
-const (
-	minerWatchReasonStreak minerWatchReason = "watchstreak"
-	minerWatchReasonPoints minerWatchReason = "points"
-)
-
-func rawStatus(entry twitch.StreamerEntry) string {
-	switch {
-	case entry.Status == twitch.StreamerError:
-		return "error"
-	case entry.Status == twitch.StreamerLoading:
-		return "loading"
-	case entry.Live:
-		return "live"
-	default:
-		return "offline"
-	}
-}
-
-func ircSummary(detail ircDetail) string {
-	if detail.joined {
-		return "irc joined"
-	}
-	return "irc idle"
 }
 
 func contentWidth(width int) int {

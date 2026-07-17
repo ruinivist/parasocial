@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 )
 
 type fakeService struct {
+	mu            sync.Mutex
 	channelPoints map[string]*twitch.ChannelPointsContext
 	metadata      map[string]*twitch.StreamMetadata
 	spadeURLs     map[string]string
@@ -20,9 +22,8 @@ type fakeService struct {
 	minuteErr     map[string]error
 	claimErr      map[string]error
 
-	claimed   []string
-	watched   []string
-	refreshed []string
+	claimed []string
+	watched []string
 }
 
 func (f *fakeService) LoadChannelPointsContext(_ context.Context, login string) (*twitch.ChannelPointsContext, error) {
@@ -43,6 +44,8 @@ func (f *fakeService) WatchStreak(_ context.Context, login string) (*int, error)
 }
 
 func (f *fakeService) ClaimCommunityPoints(_ context.Context, channelID, claimID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.claimed = append(f.claimed, channelID+":"+claimID)
 	if err, ok := f.claimErr[channelID+":"+claimID]; ok {
 		return err
@@ -51,7 +54,6 @@ func (f *fakeService) ClaimCommunityPoints(_ context.Context, channelID, claimID
 }
 
 func (f *fakeService) StreamMetadata(_ context.Context, login string) (*twitch.StreamMetadata, error) {
-	f.refreshed = append(f.refreshed, login)
 	if result, ok := f.metadata[login]; ok {
 		return result, nil
 	}
@@ -73,16 +75,32 @@ func (f *fakeService) PlaybackAccessToken(_ context.Context, login string) (*twi
 }
 
 func (f *fakeService) TouchPlayback(_ context.Context, login string, _ *twitch.PlaybackToken) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.watched = append(f.watched, "touch:"+login)
 	return nil
 }
 
 func (f *fakeService) SendMinuteWatched(_ context.Context, spadeURL string, _ twitch.MinuteWatchedPayload) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.watched = append(f.watched, "post:"+spadeURL)
 	if err, ok := f.minuteErr[spadeURL]; ok {
 		return err
 	}
 	return nil
+}
+
+func (f *fakeService) claimedCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.claimed...)
+}
+
+func (f *fakeService) watchedCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.watched...)
 }
 
 type fakePubSub struct {
@@ -120,7 +138,7 @@ func TestManagerSyncSeedsAndClaims(t *testing.T) {
 	waitFor(t, func() bool {
 		manager.mu.Lock()
 		defer manager.mu.Unlock()
-		return len(service.claimed) == 1 && manager.entries["alpha"].ChannelPoints == 250 && manager.entries["alpha"].SpadeURL != ""
+		return len(service.claimedCalls()) == 1 && manager.entries["alpha"].ChannelPoints == 250 && manager.entries["alpha"].SpadeURL != ""
 	})
 
 	if got, want := pubsub.syncCalls, [][]string{{"1"}}; !reflect.DeepEqual(got, want) {
@@ -146,7 +164,7 @@ func TestManagerWatchOnceUsesTopTwoLiveStreamers(t *testing.T) {
 	}
 	manager := NewManager(context.Background(), service, &fakePubSub{}, nil)
 	defer manager.Close()
-	manager.sleep = cancelSleep
+	manager.watchStarted = true
 
 	manager.Sync(context.Background(), &auth.State{AccessToken: "token"}, &twitch.Viewer{ID: "viewer"}, []twitch.StreamerEntry{
 		{ConfigLogin: "alpha", Login: "alpha_live", ChannelID: "1", Live: true, Status: twitch.StreamerReady},
@@ -163,7 +181,7 @@ func TestManagerWatchOnceUsesTopTwoLiveStreamers(t *testing.T) {
 	if err := manager.watchOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := service.watched, []string{
+	if got, want := service.watchedCalls(), []string{
 		"touch:alpha_live",
 		"post:https://spade.test/alpha",
 		"touch:beta_live",
@@ -189,7 +207,7 @@ func TestManagerWatchOncePrioritizesMissingWatchStreaks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got, want := service.watched, []string{
+	if got, want := service.watchedCalls(), []string{
 		"touch:beta_live",
 		"post:https://spade.test/beta_live",
 		"touch:gamma_live",
@@ -215,7 +233,7 @@ func TestManagerWatchOnceFillsWithPointsCandidates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got, want := service.watched, []string{
+	if got, want := service.watchedCalls(), []string{
 		"touch:beta_live",
 		"post:https://spade.test/beta_live",
 		"touch:alpha_live",
@@ -335,7 +353,7 @@ func TestHandlePubSubWatchStreakCompletesMaintenance(t *testing.T) {
 		CurrentWatchReason: WatchReasonStreak,
 	}
 
-	manager.handlePubSubEvent(Event{MessageType: "points-earned", ChannelID: "1", Balance: 555, ReasonCode: "WATCH_STREAK", TotalPoints: 450, Timestamp: "t1", Topic: "community-points-user-v1"})
+	manager.handlePubSubEvent(Event{MessageType: "points-earned", ChannelID: "1", Balance: 555, ReasonCode: "WATCH_STREAK", Timestamp: "t1", Topic: "community-points-user-v1"})
 
 	waitFor(t, func() bool {
 		manager.mu.Lock()
@@ -434,26 +452,6 @@ func TestManagerSyncPollingConfirmedOnlineResetsStreakState(t *testing.T) {
 	}
 }
 
-func TestManagerStreamUpWaitsForConfirmation(t *testing.T) {
-	now := time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)
-	manager := NewManager(context.Background(), &fakeService{}, &fakePubSub{}, nil)
-	defer manager.Close()
-	manager.now = func() time.Time { return now }
-	manager.entries["alpha"] = &streamerState{ConfigLogin: "alpha", ChannelID: "1", Login: "alpha_live"}
-
-	manager.handlePubSubEvent(Event{MessageType: "stream-up", ChannelID: "1", Timestamp: "up", Topic: "video-playback-by-id"})
-
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	state := manager.entries["alpha"]
-	if state.Live {
-		t.Fatal("stream-up should wait for API/viewcount confirmation")
-	}
-	if !state.PendingStreamUpAt.Equal(now) {
-		t.Fatalf("pending stream-up = %s, want %s", state.PendingStreamUpAt, now)
-	}
-}
-
 func TestHandlePubSubEventUpdatesBalanceAndClaims(t *testing.T) {
 	service := &fakeService{}
 	manager := NewManager(context.Background(), service, &fakePubSub{}, nil)
@@ -468,7 +466,7 @@ func TestHandlePubSubEventUpdatesBalanceAndClaims(t *testing.T) {
 	if manager.entries["alpha"].ChannelPoints != 555 {
 		t.Fatalf("channelPoints = %d", manager.entries["alpha"].ChannelPoints)
 	}
-	if got, want := service.claimed, []string{"1:claim-2"}; !reflect.DeepEqual(got, want) {
+	if got, want := service.claimedCalls(), []string{"1:claim-2"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("claimed = %#v, want %#v", got, want)
 	}
 }

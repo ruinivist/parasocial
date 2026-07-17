@@ -3,8 +3,6 @@
 // and streamer login resolution without exposing raw payload assembly to callers.
 package gql
 
-import "strings"
-
 // persistedQuery stores the persisted-query metadata Twitch expects.
 type persistedQuery struct {
 	Version    int    `json:"version"`
@@ -119,17 +117,4 @@ func VideoPlayerStreamInfoOverlayChannel(login string) Request {
 	return operation("VideoPlayerStreamInfoOverlayChannel", "198492e0857f6aedead9665c81c5a06d67b25b58034649687124083ff288597d", map[string]any{
 		"channel": login,
 	})
-}
-
-// HLSMasterPlaylistURL builds the usher URL Twitch uses for live playback.
-func HLSMasterPlaylistURL(login, signature, token string) string {
-	var builder strings.Builder
-	builder.Grow(len(login) + len(signature) + len(token) + 80)
-	builder.WriteString("https://usher.ttvnw.net/api/channel/hls/")
-	builder.WriteString(login)
-	builder.WriteString(".m3u8?player=twitchweb&allow_source=true&type=any&p=1&sig=")
-	builder.WriteString(signature)
-	builder.WriteString("&token=")
-	builder.WriteString(token)
-	return builder.String()
 }

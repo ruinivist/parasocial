@@ -9,24 +9,18 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
-func TestSaveStatePersistsCookieEntries(t *testing.T) {
+func TestSaveAndLoadState(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "cookies.json")
 	state := &State{
 		AccessToken: "token",
-		TokenType:   "bearer",
-		Scopes:      RequiredScopes,
 		Login:       "viewer",
-		UserID:      "123",
-		ClientID:    ClientID,
-		ExpiresIn:   3600,
 		DeviceID:    "device",
 	}
 	if err := SaveState(path, state); err != nil {
@@ -37,44 +31,8 @@ func TestSaveStatePersistsCookieEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.AccessToken != "token" {
-		t.Fatalf("AccessToken = %q", loaded.AccessToken)
-	}
-
-	gotNames := []string{}
-	for _, cookie := range loaded.Cookies {
-		gotNames = append(gotNames, cookie.Name)
-	}
-	wantNames := []string{"auth-token", "login", "persistent"}
-	if !slices.Equal(gotNames, wantNames) {
-		t.Fatalf("cookie names = %#v, want %#v", gotNames, wantNames)
-	}
-}
-
-func TestSaveStateAllowsZeroExpiresIn(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "cookies.json")
-	state := &State{
-		AccessToken: "token",
-		TokenType:   "bearer",
-		Scopes:      RequiredScopes,
-		Login:       "viewer",
-		UserID:      "123",
-		ClientID:    ClientID,
-		ExpiresIn:   0,
-		DeviceID:    "device",
-	}
-	if err := SaveState(path, state); err != nil {
-		t.Fatalf("SaveState() error = %v", err)
-	}
-
-	loaded, err := LoadState(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.ExpiresIn != 0 {
-		t.Fatalf("ExpiresIn = %d, want 0", loaded.ExpiresIn)
+	if *loaded != *state {
+		t.Fatalf("state = %#v, want %#v", loaded, state)
 	}
 }
 
@@ -102,7 +60,7 @@ func TestLoadStateRejectsPartialAuthBundle(t *testing.T) {
 	if err == nil {
 		t.Fatal("LoadState() error = nil, want error")
 	}
-	if !strings.Contains(err.Error(), "missing token_type") {
+	if !strings.Contains(err.Error(), "missing login") {
 		t.Fatalf("error = %q", err)
 	}
 }
@@ -120,11 +78,10 @@ func TestReuseAuthReusesValidCachedToken(t *testing.T) {
 			t.Fatalf("Authorization = %q", got)
 		}
 		writeJSON(t, w, validationResponse{
-			ClientID:  ClientID,
-			Login:     "viewer",
-			UserID:    "123",
-			Scopes:    RequiredScopes,
-			ExpiresIn: 3600,
+			ClientID: ClientID,
+			Login:    "viewer",
+			UserID:   "123",
+			Scopes:   RequiredScopes,
 		})
 	}))
 	defer server.Close()
@@ -132,12 +89,7 @@ func TestReuseAuthReusesValidCachedToken(t *testing.T) {
 	tokenFile := filepath.Join(t.TempDir(), "cookies.json")
 	if err := SaveState(tokenFile, &State{
 		AccessToken: "cached-token",
-		TokenType:   "bearer",
-		Scopes:      RequiredScopes,
 		Login:       "viewer",
-		UserID:      "123",
-		ClientID:    ClientID,
-		ExpiresIn:   3600,
 		DeviceID:    "device",
 	}); err != nil {
 		t.Fatal(err)
@@ -145,8 +97,6 @@ func TestReuseAuthReusesValidCachedToken(t *testing.T) {
 
 	client := NewClient(server.Client())
 	client.Endpoints = Endpoints{Validate: server.URL + "/validate"}
-	client.Now = func() time.Time { return time.Unix(100, 0).UTC() }
-
 	state, err := client.ReuseAuth(context.Background(), tokenFile)
 	if err != nil {
 		t.Fatal(err)
@@ -169,11 +119,10 @@ func TestEnsureAuthActivatesWhenCachedTokenMissingChatRead(t *testing.T) {
 			validateCalls++
 			if validateCalls == 1 {
 				writeJSON(t, w, validationResponse{
-					ClientID:  ClientID,
-					Login:     "viewer",
-					UserID:    "123",
-					Scopes:    []string{"user:read:email"},
-					ExpiresIn: 100,
+					ClientID: ClientID,
+					Login:    "viewer",
+					UserID:   "123",
+					Scopes:   []string{"user:read:email"},
 				})
 				return
 			}
@@ -181,11 +130,10 @@ func TestEnsureAuthActivatesWhenCachedTokenMissingChatRead(t *testing.T) {
 				t.Fatalf("Authorization = %q", got)
 			}
 			writeJSON(t, w, validationResponse{
-				ClientID:  ClientID,
-				Login:     "viewer",
-				UserID:    "123",
-				Scopes:    RequiredScopes,
-				ExpiresIn: 3600,
+				ClientID: ClientID,
+				Login:    "viewer",
+				UserID:   "123",
+				Scopes:   RequiredScopes,
 			})
 		case "/device":
 			if err := r.ParseForm(); err != nil {
@@ -214,11 +162,7 @@ func TestEnsureAuthActivatesWhenCachedTokenMissingChatRead(t *testing.T) {
 				t.Fatalf("device_code = %q", got)
 			}
 			writeJSON(t, w, tokenResponse{
-				AccessToken:  "new-token",
-				RefreshToken: "refresh-token",
-				Scope:        RequiredScopes,
-				TokenType:    "bearer",
-				ExpiresIn:    3600,
+				AccessToken: "new-token",
 			})
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
@@ -229,12 +173,7 @@ func TestEnsureAuthActivatesWhenCachedTokenMissingChatRead(t *testing.T) {
 	tokenFile := filepath.Join(t.TempDir(), "cookies.json")
 	if err := SaveState(tokenFile, &State{
 		AccessToken: "wrong-scope-token",
-		TokenType:   "bearer",
-		Scopes:      []string{"user:read:email"},
 		Login:       "viewer",
-		UserID:      "123",
-		ClientID:    ClientID,
-		ExpiresIn:   3600,
 		DeviceID:    "device",
 	}); err != nil {
 		t.Fatal(err)

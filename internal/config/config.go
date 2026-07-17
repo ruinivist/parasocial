@@ -12,21 +12,9 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-const configFileName = "config.toml"
-
 // Config is the user-owned TOML configuration for parasocial.
 type Config struct {
 	Streamers []string `toml:"streamers"`
-}
-
-// DefaultPath returns the config file path relative to the current working directory.
-func DefaultPath() string {
-	return configFileName
-}
-
-// LoadDefault reads config from the current working directory.
-func LoadDefault() (Config, error) {
-	return Load(DefaultPath())
 }
 
 // Load reads, normalizes, and validates a TOML config file.

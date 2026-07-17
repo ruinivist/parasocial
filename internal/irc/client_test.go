@@ -64,7 +64,6 @@ func TestRunOnceSendsAuthJoinAndRespondsToPing(t *testing.T) {
 		Token:    "token",
 		Streamer: "streamer",
 		Once:     true,
-		Out:      io.Discard,
 	}
 	if err := client.Run(context.Background()); err != nil {
 		t.Fatal(err)
@@ -122,7 +121,7 @@ func TestRunEmitsJoinAndPostJoinEvents(t *testing.T) {
 		for {
 			line, err := reader.ReadString('\n')
 			if err != nil {
-				serverErr <- err
+				serverErr <- nil
 				return
 			}
 			line = strings.TrimRight(line, "\r\n")
@@ -133,7 +132,7 @@ func TestRunEmitsJoinAndPostJoinEvents(t *testing.T) {
 				_, _ = conn.Write([]byte(":viewer!viewer@viewer.tmi.twitch.tv JOIN #streamer\r\n"))
 				_, _ = conn.Write([]byte(":someone!someone@someone.tmi.twitch.tv PRIVMSG #streamer :hello\r\n"))
 				_, _ = conn.Write([]byte("PING :tmi.twitch.tv\r\n"))
-			case "PONG :tmi.twitch.tv":
+			case "QUIT :parasocial shutting down":
 				serverErr <- nil
 				return
 			}
@@ -151,7 +150,6 @@ func TestRunEmitsJoinAndPostJoinEvents(t *testing.T) {
 		Events: func(event Event) {
 			events <- event
 		},
-		Out: io.Discard,
 	}
 
 	done := make(chan error, 1)
@@ -203,6 +201,12 @@ func TestAuthFailureReturnsError(t *testing.T) {
 			return
 		}
 		defer conn.Close()
+		reader := bufio.NewReader(conn)
+		for range 3 {
+			if _, err := reader.ReadString('\n'); err != nil {
+				return
+			}
+		}
 		_, _ = conn.Write([]byte(":tmi.twitch.tv NOTICE * :Login authentication failed\r\n"))
 	}()
 
@@ -211,7 +215,6 @@ func TestAuthFailureReturnsError(t *testing.T) {
 		Login:    "viewer",
 		Token:    "bad-token",
 		Streamer: "streamer",
-		Out:      io.Discard,
 	}
 	err = client.Run(context.Background())
 	if err == nil {

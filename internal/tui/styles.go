@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -55,21 +54,3 @@ var (
 				BorderForeground(accentColor).
 				Foreground(titleColor)
 )
-
-func newAuthViewport(width, height int) viewport.Model {
-	vp := viewport.New(width, height)
-	vp.Style = lipgloss.NewStyle()
-	return vp
-}
-
-func newIRCViewport(width, height int) viewport.Model {
-	vp := viewport.New(width, height)
-	vp.Style = lipgloss.NewStyle()
-	return vp
-}
-
-func newMinerViewport(width, height int) viewport.Model {
-	vp := viewport.New(width, height)
-	vp.Style = lipgloss.NewStyle()
-	return vp
-}

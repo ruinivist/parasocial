@@ -46,12 +46,6 @@ func TestLoadRejectsInvalidTOML(t *testing.T) {
 	}
 }
 
-func TestDefaultPathUsesCurrentWorkingDirectoryConfig(t *testing.T) {
-	if got := DefaultPath(); got != "config.toml" {
-		t.Fatalf("DefaultPath() = %q, want %q", got, "config.toml")
-	}
-}
-
 func TestLoadRejectsMissingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing.toml")
 

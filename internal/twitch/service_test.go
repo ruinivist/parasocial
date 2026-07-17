@@ -214,21 +214,18 @@ func TestStreamMetadata(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeGQL{data: map[string]string{
-		"VideoPlayerStreamInfoOverlayChannel": `{"user":{"broadcastSettings":{"title":" Live title ","game":{"id":"99","name":"game-name","displayName":"Game Name"}},"stream":{"id":"broadcast","viewersCount":77,"tags":[{"id":"1","localizedName":"English"}]}}}`,
+		"VideoPlayerStreamInfoOverlayChannel": `{"user":{"broadcastSettings":{"game":{"id":"99","name":"game-name"}},"stream":{"id":"broadcast"}}}`,
 	}}
 	service := &Service{GQL: client}
 	metadata, err := service.StreamMetadata(context.Background(), "streamer")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metadata.BroadcastID != "broadcast" || metadata.Title != "Live title" {
+	if metadata.BroadcastID != "broadcast" {
 		t.Fatalf("metadata = %#v", metadata)
 	}
 	if metadata.Game == nil || metadata.Game.Name != "game-name" {
 		t.Fatalf("game = %#v", metadata.Game)
-	}
-	if len(metadata.Tags) != 1 || metadata.Tags[0].LocalizedName != "English" {
-		t.Fatalf("tags = %#v", metadata.Tags)
 	}
 }
 

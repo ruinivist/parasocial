@@ -2,22 +2,13 @@ package irc
 
 import (
 	"context"
-	"io"
 	"net"
 	"strings"
 	"sync"
 )
 
-// Target identifies one streamer channel that should have an active IRC connection.
-type Target struct {
-	Login string
-}
-
 // Manager reconciles the active IRC connections against the desired watched set.
 type Manager struct {
-	Addr        string
-	Debug       bool
-	Out         io.Writer
 	Events      EventSink
 	DialContext func(context.Context, string, string) (net.Conn, error)
 	RunClient   func(context.Context, *Client) error
@@ -32,7 +23,7 @@ type managedClient struct {
 }
 
 // Sync applies the desired IRC target set using the provided viewer credentials.
-func (m *Manager) Sync(ctx context.Context, viewerLogin, accessToken string, targets []Target) {
+func (m *Manager) Sync(ctx context.Context, viewerLogin, accessToken string, targets []string) {
 	orderedTargets, desired := normalizeTargets(targets)
 
 	m.mu.Lock()
@@ -82,12 +73,9 @@ func (m *Manager) runClient(ctx context.Context, viewerLogin, accessToken, strea
 	m.emit(Event{Streamer: streamer, State: StatePending})
 
 	_ = run(ctx, &Client{
-		Addr:        m.addr(),
 		Login:       viewerLogin,
 		Token:       accessToken,
 		Streamer:    streamer,
-		Debug:       m.Debug,
-		Out:         m.Out,
 		Events:      m.Events,
 		DialContext: m.DialContext,
 	})
@@ -111,13 +99,6 @@ func (m *Manager) Close() {
 	m.wg.Wait()
 }
 
-func (m *Manager) addr() string {
-	if m.Addr != "" {
-		return m.Addr
-	}
-	return DefaultAddr
-}
-
 func (m *Manager) emit(event Event) {
 	if m.Events == nil {
 		return
@@ -125,11 +106,11 @@ func (m *Manager) emit(event Event) {
 	m.Events(event)
 }
 
-func normalizeTargets(targets []Target) ([]string, map[string]struct{}) {
+func normalizeTargets(targets []string) ([]string, map[string]struct{}) {
 	ordered := make([]string, 0, 2)
 	normalized := make(map[string]struct{}, len(targets))
 	for _, target := range targets {
-		login := strings.ToLower(strings.TrimSpace(target.Login))
+		login := strings.ToLower(strings.TrimSpace(target))
 		if login == "" {
 			continue
 		}

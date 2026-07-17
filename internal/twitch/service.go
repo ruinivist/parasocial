@@ -74,25 +74,14 @@ type ChannelPointsContext struct {
 
 // Game describes the current Twitch category for a live stream.
 type Game struct {
-	ID          string
-	Name        string
-	DisplayName string
+	ID   string
+	Name string
 }
 
 // StreamMetadata describes the live stream state used for watch telemetry.
 type StreamMetadata struct {
-	BroadcastID  string
-	Title        string
-	Game         *Game
-	ViewerCount  int
-	Tags         []Tag
-	ChannelLogin string
-}
-
-// Tag is one stream tag entry returned by Twitch.
-type Tag struct {
-	ID            string
-	LocalizedName string
+	BroadcastID string
+	Game        *Game
 }
 
 // MinuteWatchedPayload is the Spade telemetry body Twitch accepts for simulated viewing.
@@ -317,20 +306,13 @@ func (s *Service) StreamMetadata(ctx context.Context, login string) (*StreamMeta
 	var data struct {
 		User *struct {
 			BroadcastSettings *struct {
-				Title string `json:"title"`
-				Game  *struct {
-					ID          string `json:"id"`
-					Name        string `json:"name"`
-					DisplayName string `json:"displayName"`
+				Game *struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
 				} `json:"game"`
 			} `json:"broadcastSettings"`
 			Stream *struct {
-				ID           string `json:"id"`
-				ViewersCount int    `json:"viewersCount"`
-				Tags         []struct {
-					ID            string `json:"id"`
-					LocalizedName string `json:"localizedName"`
-				} `json:"tags"`
+				ID string `json:"id"`
 			} `json:"stream"`
 		} `json:"user"`
 	}
@@ -344,24 +326,12 @@ func (s *Service) StreamMetadata(ctx context.Context, login string) (*StreamMeta
 		return nil, fmt.Errorf("stream metadata missing broadcast settings for %s", login)
 	}
 
-	metadata := &StreamMetadata{
-		BroadcastID:  data.User.Stream.ID,
-		Title:        strings.TrimSpace(data.User.BroadcastSettings.Title),
-		ViewerCount:  data.User.Stream.ViewersCount,
-		ChannelLogin: login,
-	}
+	metadata := &StreamMetadata{BroadcastID: data.User.Stream.ID}
 	if game := data.User.BroadcastSettings.Game; game != nil {
 		metadata.Game = &Game{
-			ID:          game.ID,
-			Name:        game.Name,
-			DisplayName: game.DisplayName,
+			ID:   game.ID,
+			Name: game.Name,
 		}
-	}
-	for _, tag := range data.User.Stream.Tags {
-		metadata.Tags = append(metadata.Tags, Tag{
-			ID:            tag.ID,
-			LocalizedName: tag.LocalizedName,
-		})
 	}
 	if metadata.BroadcastID == "" {
 		return nil, fmt.Errorf("stream metadata missing broadcast id for %s", login)
@@ -423,7 +393,7 @@ func (s *Service) TouchPlayback(ctx context.Context, login string, token *Playba
 	if token == nil || token.Signature == "" || token.Value == "" {
 		return errors.New("playback access token is incomplete")
 	}
-	masterURL := gql.HLSMasterPlaylistURL(login, token.Signature, token.Value)
+	masterURL := "https://usher.ttvnw.net/api/channel/hls/" + login + ".m3u8?player=twitchweb&allow_source=true&type=any&p=1&sig=" + token.Signature + "&token=" + token.Value
 	variantURL, err := s.fetchPlaylistTarget(ctx, masterURL)
 	if err != nil {
 		return fmt.Errorf("fetch master playlist: %w", err)

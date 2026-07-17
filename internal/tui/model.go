@@ -8,6 +8,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"parasocial/internal/auth"
+	"parasocial/internal/irc"
+	"parasocial/internal/miner"
 	"parasocial/internal/twitch"
 )
 
@@ -61,7 +63,7 @@ type Model struct {
 	focus           panelFocus
 	ircDetails      map[string]ircDetail
 	minerDetails    map[string][]string
-	minerStatuses   map[string]MinerStatus
+	minerStatuses   map[string]miner.StatusEntry
 	authViewport    viewport.Model
 	ircViewport     viewport.Model
 	minerViewport   viewport.Model
@@ -87,13 +89,13 @@ func New(options Options) Model {
 		mode:          authView,
 		ircDetails:    make(map[string]ircDetail),
 		minerDetails:  make(map[string][]string),
-		minerStatuses: make(map[string]MinerStatus),
+		minerStatuses: make(map[string]miner.StatusEntry),
 		width:         defaultViewWidth,
 		height:        24,
 		focus:         focusStreamers,
-		authViewport:  newAuthViewport(contentWidth(defaultViewWidth), authViewportHeight(24)),
-		ircViewport:   newIRCViewport(detailViewportWidth(defaultViewWidth), detailViewportHeight(24, "")),
-		minerViewport: newMinerViewport(
+		authViewport:  viewport.New(contentWidth(defaultViewWidth), authViewportHeight(24)),
+		ircViewport:   viewport.New(detailViewportWidth(defaultViewWidth), detailViewportHeight(24, "")),
+		minerViewport: viewport.New(
 			detailViewportWidth(defaultViewWidth),
 			detailViewportHeight(24, ""),
 		),
@@ -206,7 +208,7 @@ func (m Model) updateAuth(msg AuthUpdate) (tea.Model, tea.Cmd) {
 			m.streamers = loadingEntries(m.streamers)
 			m.ircDetails = make(map[string]ircDetail)
 			m.minerDetails = make(map[string][]string)
-			m.minerStatuses = make(map[string]MinerStatus)
+			m.minerStatuses = make(map[string]miner.StatusEntry)
 			m.selectedConfig = ""
 			m.focus = focusStreamers
 			m.ensureSelection()
@@ -233,8 +235,17 @@ func (m Model) updateStreamer(msg StreamerUpdate) (tea.Model, tea.Cmd) {
 	if msg.IRC != nil {
 		m.applyIRCUpdate(*msg.IRC)
 	}
-	if msg.Miner != nil {
-		m.applyMinerUpdate(*msg.Miner)
+	if update := msg.MinerLog; update != nil {
+		if login := normalizeKey(update.Login); login != "" {
+			if line := strings.TrimSpace(update.Line); line != "" {
+				m.minerDetails[login] = appendCappedHistory(m.minerDetails[login], line)
+			}
+		}
+	}
+	if update := msg.MinerStatus; update != nil {
+		if login := normalizeKey(update.Login); login != "" {
+			m.minerStatuses[login] = *update
+		}
 	}
 	if msg.Err != nil {
 		m.resolveErr = msg.Err
@@ -251,37 +262,23 @@ func (m Model) updateStreamer(msg StreamerUpdate) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) applyIRCUpdate(update IRCUpdate) {
-	login := normalizeKey(update.Login)
+func (m *Model) applyIRCUpdate(update irc.Event) {
+	login := normalizeKey(update.Streamer)
 	if login == "" {
 		return
 	}
 
 	detail := m.ircDetails[login]
 	switch update.State {
-	case IRCJoined:
+	case irc.StateJoined:
 		detail.joined = true
-	case IRCPending, IRCDisconnected:
+	case irc.StatePending, irc.StateDisconnected:
 		detail.joined = false
 	}
 	if message, ok := formatIRCChatLine(update.Line); ok {
 		detail.messages = appendCappedHistory(detail.messages, message)
 	}
 	m.ircDetails[login] = detail
-}
-
-func (m *Model) applyMinerUpdate(update MinerUpdate) {
-	login := normalizeKey(update.Login)
-	if login == "" {
-		return
-	}
-	if update.Status != nil {
-		m.minerStatuses[login] = *update.Status
-	}
-	line := strings.TrimSpace(update.Line)
-	if line != "" {
-		m.minerDetails[login] = appendCappedHistory(m.minerDetails[login], line)
-	}
 }
 
 func (m *Model) ensureSelection() {
@@ -480,14 +477,6 @@ func (m Model) visibleDetailTab() detailTab {
 	default:
 		return infoTab
 	}
-}
-
-func (m Model) isStreamersFocused() bool {
-	return m.focus == focusStreamers
-}
-
-func (m Model) isRightPanelFocused() bool {
-	return m.focus == focusInfo || m.focus == focusIRC || m.focus == focusMiner
 }
 
 func isActive(entry twitch.StreamerEntry) bool {

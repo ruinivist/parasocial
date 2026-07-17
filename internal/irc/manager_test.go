@@ -25,11 +25,7 @@ func TestManagerSyncStartsAtMostTwoTargets(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	manager.Sync(ctx, "viewer", "token", []Target{
-		{Login: "alpha"},
-		{Login: "beta"},
-		{Login: "gamma"},
-	})
+	manager.Sync(ctx, "viewer", "token", []string{"alpha", "beta", "gamma"})
 
 	assertStartSet(t, started, "alpha", "beta")
 	assertNoStart(t, started)
@@ -50,10 +46,10 @@ func TestManagerSyncKeepsExistingTargetsConnected(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	manager.Sync(ctx, "viewer", "token", []Target{{Login: "alpha"}})
+	manager.Sync(ctx, "viewer", "token", []string{"alpha"})
 	assertStartSet(t, started, "alpha")
 
-	manager.Sync(ctx, "viewer", "token", []Target{{Login: "alpha"}})
+	manager.Sync(ctx, "viewer", "token", []string{"alpha"})
 	assertNoStart(t, started)
 }
 
@@ -74,10 +70,10 @@ func TestManagerSyncCancelsRemovedTargets(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	manager.Sync(ctx, "viewer", "token", []Target{{Login: "alpha"}, {Login: "beta"}})
+	manager.Sync(ctx, "viewer", "token", []string{"alpha", "beta"})
 	assertStartSet(t, started, "alpha", "beta")
 
-	manager.Sync(ctx, "viewer", "token", []Target{{Login: "beta"}, {Login: "gamma"}})
+	manager.Sync(ctx, "viewer", "token", []string{"beta", "gamma"})
 	assertStartSet(t, started, "gamma")
 	assertCancels(t, canceled, "alpha")
 	assertNoStart(t, started)
@@ -109,7 +105,7 @@ func TestManagerSyncRestartsTargetAfterFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	manager.Sync(ctx, "viewer", "token", []Target{{Login: "alpha"}})
+	manager.Sync(ctx, "viewer", "token", []string{"alpha"})
 	assertStartSet(t, started, "alpha")
 
 	waitFor(t, func() bool {
@@ -119,7 +115,7 @@ func TestManagerSyncRestartsTargetAfterFailure(t *testing.T) {
 		return !ok
 	})
 
-	manager.Sync(ctx, "viewer", "token", []Target{{Login: "alpha"}})
+	manager.Sync(ctx, "viewer", "token", []string{"alpha"})
 	assertStartSet(t, started, "alpha")
 }
 
@@ -138,7 +134,7 @@ func TestManagerEmitsPendingAndDisconnectedEvents(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	manager.Sync(ctx, "viewer", "token", []Target{{Login: "alpha"}})
+	manager.Sync(ctx, "viewer", "token", []string{"alpha"})
 	cancel()
 	manager.Close()
 

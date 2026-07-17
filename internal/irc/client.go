@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"strings"
 	"sync"
@@ -41,14 +40,12 @@ type Client struct {
 	Token       string
 	Streamer    string
 	Once        bool
-	Debug       bool
-	Out         io.Writer
 	Events      EventSink
 	DialContext func(context.Context, string, string) (net.Conn, error)
 }
 
 // Run connects, authenticates, joins the configured streamer channel, and stays connected.
-func (c *Client) Run(ctx context.Context) error {
+func (c *Client) Run(ctx context.Context) (err error) {
 	if c.Login == "" {
 		return errors.New("missing Twitch login")
 	}
@@ -58,23 +55,23 @@ func (c *Client) Run(ctx context.Context) error {
 	if c.Streamer == "" {
 		return errors.New("missing streamer")
 	}
+	defer func() {
+		if ctx.Err() != nil {
+			err = nil
+		}
+	}()
 
 	addr := c.Addr
 	if addr == "" {
 		addr = DefaultAddr
 	}
 
-	c.status("Connecting to %s\n", addr)
 	conn, err := c.dial(ctx, addr)
 	if err != nil {
 		return fmt.Errorf("connect to Twitch IRC: %w", err)
 	}
 
-	session := &session{
-		conn:  conn,
-		out:   c.Out,
-		debug: c.Debug,
-	}
+	session := &session{conn: conn}
 	defer session.close()
 
 	done := make(chan struct{})
@@ -82,24 +79,21 @@ func (c *Client) Run(ctx context.Context) error {
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = session.send("QUIT :parasocial shutting down", false)
+			_ = session.send("QUIT :parasocial shutting down")
 			session.close()
 		case <-done:
 		}
 	}()
 
-	if err := session.send("PASS oauth:"+c.Token, true); err != nil {
+	if err := session.send("PASS oauth:" + c.Token); err != nil {
 		return err
 	}
-	c.status("Sent PASS\n")
-	if err := session.send("NICK "+c.Login, false); err != nil {
+	if err := session.send("NICK " + c.Login); err != nil {
 		return err
 	}
-	c.status("Sent NICK %s\n", c.Login)
-	if err := session.send("JOIN #"+c.Streamer, false); err != nil {
+	if err := session.send("JOIN #" + c.Streamer); err != nil {
 		return err
 	}
-	c.status("Sent JOIN #%s\n", c.Streamer)
 
 	reader := bufio.NewReader(conn)
 	joined := false
@@ -116,13 +110,10 @@ func (c *Client) Run(ctx context.Context) error {
 		}
 
 		line = strings.TrimRight(line, "\r\n")
-		session.debugIn(line)
-
 		if payload, ok := pingPayload(line); ok {
-			if err := session.send("PONG "+payload, false); err != nil {
+			if err := session.send("PONG " + payload); err != nil {
 				return err
 			}
-			c.status("Responded to PING\n")
 			continue
 		}
 
@@ -133,16 +124,14 @@ func (c *Client) Run(ctx context.Context) error {
 			return fmt.Errorf("IRC join denied: %s", line)
 		}
 		if isWelcome(line) {
-			c.status("IRC authentication accepted\n")
 			continue
 		}
 		if isJoinConfirmation(line, c.Login, c.Streamer) {
 			joinedLine := fmt.Sprintf("Joined #%s as %s", c.Streamer, c.Login)
-			c.status("%s\n", joinedLine)
 			c.emit(StateJoined, joinedLine)
 			joined = true
 			if c.Once {
-				if err := session.send("QUIT :parasocial --once complete", false); err != nil {
+				if err := session.send("QUIT :parasocial --once complete"); err != nil {
 					return err
 				}
 				return nil
@@ -150,39 +139,23 @@ func (c *Client) Run(ctx context.Context) error {
 			continue
 		}
 		if joined {
-			c.status("%s\n", line)
 			c.emit("", line)
 		}
 	}
 }
 
 type session struct {
-	conn  net.Conn
-	out   io.Writer
-	debug bool
-	mu    sync.Mutex
-	once  sync.Once
+	conn net.Conn
+	mu   sync.Mutex
+	once sync.Once
 }
 
-func (s *session) send(line string, redact bool) error {
+func (s *session) send(line string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	debugLine := line
-	if redact {
-		debugLine = "PASS oauth:<redacted>"
-	}
-	if s.debug && s.out != nil {
-		fmt.Fprintf(s.out, "> %s\n", debugLine)
-	}
 	_, err := fmt.Fprintf(s.conn, "%s\r\n", line)
 	return err
-}
-
-func (s *session) debugIn(line string) {
-	if s.debug && s.out != nil {
-		fmt.Fprintf(s.out, "< %s\n", line)
-	}
 }
 
 func (s *session) close() {
@@ -198,13 +171,6 @@ func (c *Client) dial(ctx context.Context, addr string) (net.Conn, error) {
 	}
 	dialer := &net.Dialer{Timeout: 30 * time.Second}
 	return dialer.DialContext(ctx, "tcp", addr)
-}
-
-func (c *Client) status(format string, args ...any) {
-	if c.Out == nil {
-		return
-	}
-	fmt.Fprintf(c.Out, format, args...)
 }
 
 func (c *Client) emit(state ConnectionState, line string) {

@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -27,7 +28,7 @@ const (
 
 	tvOrigin    = "https://android.tv.twitch.tv"
 	tvReferer   = "https://android.tv.twitch.tv/"
-	tvUserAgent = "Mozilla/5.0 (Linux; Android 7.1; Smart Box C1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+	TVUserAgent = "Mozilla/5.0 (Linux; Android 7.1; Smart Box C1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
 )
 
 var RequiredScopes = []string{
@@ -71,20 +72,15 @@ type deviceCodeResponse struct {
 
 // tokenResponse models the token payload returned after device authorization succeeds.
 type tokenResponse struct {
-	AccessToken  string   `json:"access_token"`
-	RefreshToken string   `json:"refresh_token"`
-	Scope        []string `json:"scope"`
-	TokenType    string   `json:"token_type"`
-	ExpiresIn    int      `json:"expires_in"`
+	AccessToken string `json:"access_token"`
 }
 
 // validationResponse models the token introspection data returned by Twitch validate.
 type validationResponse struct {
-	ClientID  string   `json:"client_id"`
-	Login     string   `json:"login"`
-	Scopes    []string `json:"scopes"`
-	UserID    string   `json:"user_id"`
-	ExpiresIn int      `json:"expires_in"`
+	ClientID string   `json:"client_id"`
+	Login    string   `json:"login"`
+	Scopes   []string `json:"scopes"`
+	UserID   string   `json:"user_id"`
 }
 
 // oauthErrorResponse captures structured OAuth errors returned by Twitch endpoints.
@@ -147,7 +143,7 @@ func (c *Client) ReuseAuth(ctx context.Context, path string) (*State, error) {
 		return nil, nil
 	}
 
-	state.applyValidation(validation, c.now())
+	state.Login = validation.Login
 	if err := SaveState(path, state); err != nil {
 		return nil, fmt.Errorf("save validated auth state: %w", err)
 	}
@@ -175,7 +171,7 @@ func (c *Client) EnsureAuth(ctx context.Context, path string, status StatusFunc)
 		c.status(status, "Validating cached token from %s", path)
 		validation, err := c.ValidateToken(ctx, state.AccessToken)
 		if err == nil && hasAllScopes(validation.Scopes, RequiredScopes) {
-			state.applyValidation(validation, c.now())
+			state.Login = validation.Login
 			if err := SaveState(path, state); err != nil {
 				return nil, fmt.Errorf("save validated auth state: %w", err)
 			}
@@ -203,14 +199,7 @@ func (c *Client) EnsureAuth(ctx context.Context, path string, status StatusFunc)
 	}
 
 	state.AccessToken = tokenResp.AccessToken
-	state.RefreshToken = tokenResp.RefreshToken
-	state.TokenType = tokenResp.TokenType
-	if state.TokenType == "" {
-		state.TokenType = "bearer"
-	}
-	state.Scopes = tokenResp.Scope
-	state.ExpiresIn = tokenResp.ExpiresIn
-	state.applyValidation(validation, c.now())
+	state.Login = validation.Login
 
 	if err := SaveState(path, state); err != nil {
 		return nil, fmt.Errorf("save auth state: %w", err)
@@ -222,13 +211,13 @@ func (c *Client) EnsureAuth(ctx context.Context, path string, status StatusFunc)
 
 // ValidateToken asks Twitch whether an OAuth access token is still valid.
 func (c *Client) ValidateToken(ctx context.Context, accessToken string) (*validationResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoints().Validate, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Endpoints.Validate, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "OAuth "+accessToken)
 
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +258,7 @@ func (c *Client) activate(ctx context.Context, deviceID string, status StatusFun
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
-	deadline := c.now().Add(time.Duration(deviceResp.ExpiresIn) * time.Second)
+	deadline := c.Now().Add(time.Duration(deviceResp.ExpiresIn) * time.Second)
 
 	c.status(status, "== Twitch activation ==")
 	c.status(status, "Open page: %s", deviceResp.VerificationURI)
@@ -286,7 +275,7 @@ func (c *Client) requestDeviceCode(ctx context.Context, deviceID string) (*devic
 	form.Set("client_id", ClientID)
 	form.Set("scopes", strings.Join(RequiredScopes, " "))
 
-	body, statusCode, err := c.postForm(ctx, c.endpoints().Device, deviceID, form)
+	body, statusCode, err := c.postForm(ctx, c.Endpoints.Device, deviceID, form)
 	if err != nil {
 		return nil, err
 	}
@@ -311,13 +300,13 @@ func (c *Client) requestDeviceCode(ctx context.Context, deviceID string) (*devic
 func (c *Client) pollForToken(ctx context.Context, deviceID, deviceCode string, interval time.Duration, deadline time.Time, status StatusFunc) (*tokenResponse, error) {
 	attempt := 1
 	for {
-		if !c.now().Before(deadline) {
+		if !c.Now().Before(deadline) {
 			return nil, fmt.Errorf("device code expired at %s before authorization completed", deadline.Format(time.RFC3339))
 		}
 
-		remaining := deadline.Sub(c.now()).Round(time.Second)
+		remaining := deadline.Sub(c.Now()).Round(time.Second)
 		c.status(status, "[poll %d] waiting %s before token request (%s remaining)", attempt, interval, remaining)
-		if err := c.sleep(ctx, interval); err != nil {
+		if err := c.Sleep(ctx, interval); err != nil {
 			return nil, err
 		}
 
@@ -326,7 +315,7 @@ func (c *Client) pollForToken(ctx context.Context, deviceID, deviceCode string, 
 		form.Set("device_code", deviceCode)
 		form.Set("grant_type", pollGrantType)
 
-		body, statusCode, err := c.postForm(ctx, c.endpoints().Token, deviceID, form)
+		body, statusCode, err := c.postForm(ctx, c.Endpoints.Token, deviceID, form)
 		if err != nil {
 			return nil, fmt.Errorf("poll request failed on attempt %d: %w", attempt, err)
 		}
@@ -368,12 +357,18 @@ func (c *Client) postForm(ctx context.Context, endpoint, deviceID string, form u
 	if err != nil {
 		return nil, 0, err
 	}
-	for key, value := range defaultOAuthHeaders(deviceID) {
-		req.Header.Set(key, value)
-	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept-Language", "en-US")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Client-Id", ClientID)
+	req.Header.Set("Origin", tvOrigin)
+	req.Header.Set("Pragma", "no-cache")
+	req.Header.Set("Referer", tvReferer)
+	req.Header.Set("User-Agent", TVUserAgent)
+	req.Header.Set("X-Device-Id", deviceID)
 	req.Header.Set("Content-Type", contentTypeForm)
 
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -431,51 +426,10 @@ func (r oauthErrorResponse) summary() string {
 	return strings.Join(parts, ", ")
 }
 
-// defaultOAuthHeaders builds the Twitch TV request headers used for auth requests.
-func defaultOAuthHeaders(deviceID string) map[string]string {
-	return map[string]string{
-		"Accept":          "application/json",
-		"Accept-Language": "en-US",
-		"Cache-Control":   "no-cache",
-		"Client-Id":       ClientID,
-		"Origin":          tvOrigin,
-		"Pragma":          "no-cache",
-		"Referer":         tvReferer,
-		"User-Agent":      TVUserAgent(),
-		"X-Device-Id":     deviceID,
-	}
-}
-
-// TVUserAgent returns the Twitch TV user agent used to impersonate the device client.
-func TVUserAgent() string {
-	return tvUserAgent
-}
-
-// applyValidation copies validated account metadata back onto the persisted auth state.
-func (s *State) applyValidation(validation *validationResponse, validatedAt time.Time) {
-	s.Login = validation.Login
-	s.UserID = validation.UserID
-	s.ClientID = validation.ClientID
-	s.Scopes = validation.Scopes
-	s.ExpiresIn = validation.ExpiresIn
-	s.ValidatedAt = validatedAt
-	s.Cookies = s.persistedCookies()
-}
-
-// hasScope reports whether the token scopes include one exact scope string.
-func hasScope(scopes []string, scope string) bool {
-	for _, candidate := range scopes {
-		if candidate == scope {
-			return true
-		}
-	}
-	return false
-}
-
 // hasAllScopes reports whether the token satisfies the full required scope set.
 func hasAllScopes(scopes []string, required []string) bool {
 	for _, scope := range required {
-		if !hasScope(scopes, scope) {
+		if !slices.Contains(scopes, scope) {
 			return false
 		}
 	}
@@ -509,38 +463,6 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
-}
-
-// httpClient returns the configured HTTP client or falls back to the default client.
-func (c *Client) httpClient() *http.Client {
-	if c.HTTPClient != nil {
-		return c.HTTPClient
-	}
-	return http.DefaultClient
-}
-
-// endpoints returns the configured endpoint set or the package defaults.
-func (c *Client) endpoints() Endpoints {
-	if c.Endpoints == (Endpoints{}) {
-		return DefaultEndpoints
-	}
-	return c.Endpoints
-}
-
-// now returns the current time using the injected clock when one is configured.
-func (c *Client) now() time.Time {
-	if c.Now != nil {
-		return c.Now()
-	}
-	return time.Now()
-}
-
-// sleep delegates waiting to the injected hook when tests need deterministic timing.
-func (c *Client) sleep(ctx context.Context, d time.Duration) error {
-	if c.Sleep != nil {
-		return c.Sleep(ctx, d)
-	}
-	return sleepContext(ctx, d)
 }
 
 // status formats and emits one auth progress line when a status sink is attached.

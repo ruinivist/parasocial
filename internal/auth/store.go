@@ -9,30 +9,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 )
 
 const authFileName = "cookies.json"
 
-// Cookie stores one persisted cookie-like name/value entry in the auth bundle.
-type Cookie struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
-}
-
 // State is the persisted cwd auth bundle for the app.
 type State struct {
-	AccessToken  string    `json:"access_token"`
-	RefreshToken string    `json:"refresh_token,omitempty"`
-	TokenType    string    `json:"token_type"`
-	Scopes       []string  `json:"scopes"`
-	Login        string    `json:"login"`
-	UserID       string    `json:"user_id"`
-	ClientID     string    `json:"client_id"`
-	ExpiresIn    int       `json:"expires_in"`
-	ValidatedAt  time.Time `json:"validated_at"`
-	DeviceID     string    `json:"device_id"`
-	Cookies      []Cookie  `json:"cookies,omitempty"`
+	AccessToken string `json:"access_token"`
+	Login       string `json:"login"`
+	DeviceID    string `json:"device_id"`
 }
 
 // DefaultPath returns the cwd auth bundle path.
@@ -72,10 +57,7 @@ func SaveState(path string, state *State) error {
 		return err
 	}
 
-	copy := *state
-	copy.Cookies = copy.persistedCookies()
-
-	data, err := json.MarshalIndent(copy, "", "  ")
+	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -83,30 +65,13 @@ func SaveState(path string, state *State) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-// persistedCookies rebuilds the cookie-like entries that must travel with the saved auth bundle.
-func (s *State) persistedCookies() []Cookie {
-	return []Cookie{
-		{Name: "auth-token", Value: s.AccessToken},
-		{Name: "login", Value: s.Login},
-		{Name: "persistent", Value: s.UserID},
-	}
-}
-
 // validate rejects partial auth bundles so loading and saving use one canonical shape.
 func (s *State) validate() error {
 	switch {
 	case s.AccessToken == "":
 		return fmt.Errorf("missing access_token")
-	case s.TokenType == "":
-		return fmt.Errorf("missing token_type")
 	case s.Login == "":
 		return fmt.Errorf("missing login")
-	case s.UserID == "":
-		return fmt.Errorf("missing user_id")
-	case s.ClientID == "":
-		return fmt.Errorf("missing client_id")
-	case len(s.Scopes) == 0:
-		return fmt.Errorf("missing scopes")
 	case s.DeviceID == "":
 		return fmt.Errorf("missing device_id")
 	default:

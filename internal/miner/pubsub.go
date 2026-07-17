@@ -6,7 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,7 +30,6 @@ type Event struct {
 	Balance     int
 	ClaimID     string
 	ReasonCode  string
-	TotalPoints int
 }
 
 func (e Event) key() string {
@@ -45,7 +45,6 @@ type Client struct {
 	dialer   *websocket.Dialer
 	mu       sync.Mutex
 	conn     *websocket.Conn
-	viewerID string
 	token    string
 	topics   []string
 	updateCh chan struct{}
@@ -81,12 +80,11 @@ func (c *Client) Sync(_ context.Context, viewerID, accessToken string, channelID
 		}
 		topics = append(topics, "video-playback-by-id."+channelID)
 	}
-	sort.Strings(topics)
+	slices.Sort(topics)
 
 	c.mu.Lock()
-	c.viewerID = viewerID
 	c.token = accessToken
-	changed := !equalStrings(c.topics, topics)
+	changed := !slices.Equal(c.topics, topics)
 	c.topics = topics
 	conn := c.conn
 	c.mu.Unlock()
@@ -258,15 +256,13 @@ func (c *Client) snapshot() ([]string, string) {
 
 type frame struct {
 	Type  string
-	Error string
 	Event Event
 }
 
 func parseFrame(message []byte) (*frame, error) {
 	var envelope struct {
-		Type  string `json:"type"`
-		Error string `json:"error"`
-		Data  *struct {
+		Type string `json:"type"`
+		Data *struct {
 			Topic   string `json:"topic"`
 			Message string `json:"message"`
 		} `json:"data"`
@@ -275,7 +271,7 @@ func parseFrame(message []byte) (*frame, error) {
 		return nil, err
 	}
 
-	result := &frame{Type: envelope.Type, Error: envelope.Error}
+	result := &frame{Type: envelope.Type}
 	if envelope.Type != "MESSAGE" || envelope.Data == nil {
 		return result, nil
 	}
@@ -294,13 +290,17 @@ func parseFrame(message []byte) (*frame, error) {
 				ChannelID string `json:"channel_id"`
 			} `json:"balance"`
 			PointGain *struct {
-				ReasonCode  string `json:"reason_code"`
-				TotalPoints int    `json:"total_points"`
+				ReasonCode string `json:"reason_code"`
 			} `json:"point_gain"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(envelope.Data.Message), &payload); err != nil {
 		return nil, err
+	}
+	topic := envelope.Data.Topic
+	topicName, topicChannelID := topic, ""
+	if i := strings.LastIndexByte(topic, '.'); i >= 0 {
+		topicName, topicChannelID = topic[:i], topic[i+1:]
 	}
 
 	channelID := payload.Data.ChannelID
@@ -311,11 +311,11 @@ func parseFrame(message []byte) (*frame, error) {
 		channelID = payload.Data.Balance.ChannelID
 	}
 	if channelID == "" {
-		channelID = topicSuffix(envelope.Data.Topic)
+		channelID = topicChannelID
 	}
 
 	result.Event = Event{
-		Topic:       topicPrefix(envelope.Data.Topic),
+		Topic:       topicName,
 		MessageType: payload.Type,
 		ChannelID:   channelID,
 		Timestamp:   payload.Data.Timestamp,
@@ -328,37 +328,6 @@ func parseFrame(message []byte) (*frame, error) {
 	}
 	if payload.Data.PointGain != nil {
 		result.Event.ReasonCode = payload.Data.PointGain.ReasonCode
-		result.Event.TotalPoints = payload.Data.PointGain.TotalPoints
 	}
 	return result, nil
-}
-
-func topicPrefix(topic string) string {
-	for i := len(topic) - 1; i >= 0; i-- {
-		if topic[i] == '.' {
-			return topic[:i]
-		}
-	}
-	return topic
-}
-
-func topicSuffix(topic string) string {
-	for i := len(topic) - 1; i >= 0; i-- {
-		if topic[i] == '.' {
-			return topic[i+1:]
-		}
-	}
-	return ""
-}
-
-func equalStrings(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if left[i] != right[i] {
-			return false
-		}
-	}
-	return true
 }

@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"parasocial/internal/auth"
-	"parasocial/internal/irc"
-	"parasocial/internal/miner"
 	"parasocial/internal/twitch"
 )
 
@@ -73,40 +71,12 @@ func (f *fakeStreamerService) PlaybackAccessToken(_ context.Context, login strin
 	return &twitch.PlaybackToken{Signature: "sig", Value: "token"}, nil
 }
 
-func (f *fakeStreamerService) LoadChannelPointsContext(context.Context, string) (*twitch.ChannelPointsContext, error) {
-	return &twitch.ChannelPointsContext{Balance: 0}, nil
-}
-
-func (f *fakeStreamerService) ClaimCommunityPoints(context.Context, string, string) error {
-	return nil
-}
-
-func (f *fakeStreamerService) StreamMetadata(context.Context, string) (*twitch.StreamMetadata, error) {
-	return &twitch.StreamMetadata{BroadcastID: "broadcast"}, nil
-}
-
-func (f *fakeStreamerService) FetchSpadeURL(context.Context, string) (string, error) {
-	return "https://spade.test", nil
-}
-
-func (f *fakeStreamerService) TouchPlayback(context.Context, string, *twitch.PlaybackToken) error {
-	return nil
-}
-
-func (f *fakeStreamerService) SendMinuteWatched(context.Context, string, twitch.MinuteWatchedPayload) error {
-	return nil
-}
-
 type fakeIRCSyncer struct {
 	calls [][]string
 }
 
-func (f *fakeIRCSyncer) Sync(_ context.Context, _, _ string, targets []irc.Target) {
-	logins := make([]string, 0, len(targets))
-	for _, target := range targets {
-		logins = append(logins, target.Login)
-	}
-	f.calls = append(f.calls, logins)
+func (f *fakeIRCSyncer) Sync(_ context.Context, _, _ string, targets []string) {
+	f.calls = append(f.calls, append([]string{}, targets...))
 }
 
 type fakeMinerSyncer struct {
@@ -247,23 +217,6 @@ func TestResolveStreamerEntriesRefreshUpdatesWatchedChannels(t *testing.T) {
 		{},
 		{"beta_live"},
 	})
-}
-
-func TestNewMinerLogSinkBridgesMinerEntriesIntoStreamerUpdates(t *testing.T) {
-	ch := make(chan StreamerUpdate, 1)
-
-	newMinerLogSink(ch)(miner.LogEntry{
-		Login: "alpha_live",
-		Line:  "pubsub points earned: balance=42",
-	})
-
-	update := <-ch
-	if update.Miner == nil {
-		t.Fatal("expected miner update")
-	}
-	if update.Miner.Login != "alpha_live" || update.Miner.Line != "pubsub points earned: balance=42" {
-		t.Fatalf("miner update = %#v", update.Miner)
-	}
 }
 
 type serviceOption func(*fakeStreamerService)

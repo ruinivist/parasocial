@@ -52,12 +52,11 @@ const (
 
 // StatusEntry is the current miner state for one resolved streamer login.
 type StatusEntry struct {
-	Login              string
-	Watching           bool
-	Reason             WatchReason
-	WatchedMinutes     int
-	WatchStreakMinutes int
-	WatchStreak        *int
+	Login          string
+	Watching       bool
+	Reason         WatchReason
+	WatchedMinutes int
+	WatchStreak    *int
 }
 
 // Manager owns background channel points mining state for the current authenticated user.
@@ -89,7 +88,6 @@ type streamerState struct {
 	ChannelPoints int
 	SpadeURL      string
 	Metadata      *twitch.StreamMetadata
-	LastWatchAt   time.Time
 
 	WatchStreak        *int
 	WatchStreakMissing bool
@@ -98,10 +96,7 @@ type streamerState struct {
 	CurrentWatchReason WatchReason
 	OnlineAt           time.Time
 	OfflineAt          time.Time
-	PendingStreamUpAt  time.Time
-	CurrentBroadcastID string
 
-	seeded     bool
 	seeding    bool
 	refreshing bool
 }
@@ -146,13 +141,9 @@ func (m *Manager) Sync(ctx context.Context, state *auth.State, viewer *twitch.Vi
 		return
 	}
 
-	type seedTarget struct {
-		configLogin string
-	}
-
 	var (
 		channelIDs []string
-		seedList   []seedTarget
+		seedList   []string
 		statuses   []StatusEntry
 	)
 
@@ -176,7 +167,7 @@ func (m *Manager) Sync(ctx context.Context, state *auth.State, viewer *twitch.Vi
 				Login:       entry.Login,
 				ChannelID:   entry.ChannelID,
 			}
-			seedList = append(seedList, seedTarget{configLogin: entry.ConfigLogin})
+			seedList = append(seedList, entry.ConfigLogin)
 		}
 
 		current.ConfigLogin = entry.ConfigLogin
@@ -203,8 +194,8 @@ func (m *Manager) Sync(ctx context.Context, state *auth.State, viewer *twitch.Vi
 	m.emitStatuses(statuses)
 
 	_ = m.pubsub.Sync(ctx, viewer.ID, state.AccessToken, channelIDs)
-	for _, target := range seedList {
-		m.scheduleSeed(target.configLogin)
+	for _, configLogin := range seedList {
+		m.scheduleSeed(configLogin)
 	}
 }
 
@@ -256,7 +247,6 @@ func (m *Manager) scheduleSeed(configLogin string) {
 			m.mu.Lock()
 			if current, ok := m.entries[configLogin]; ok && current.ChannelID == channelID {
 				current.ChannelPoints = channelPoints.Balance
-				current.seeded = true
 			}
 			m.mu.Unlock()
 			m.logf(login, "seeded channel points balance: %d", channelPoints.Balance)
@@ -312,7 +302,6 @@ func (m *Manager) scheduleRefresh(configLogin string) {
 		if current, ok := m.entries[configLogin]; ok && current.ChannelID == channelID {
 			current.SpadeURL = spadeURL
 			current.Metadata = metadata
-			current.CurrentBroadcastID = metadata.BroadcastID
 			current.Live = true
 		}
 		m.mu.Unlock()
@@ -378,7 +367,6 @@ func (m *Manager) watchOnce(ctx context.Context) error {
 		m.mu.Lock()
 		statuses := []StatusEntry{}
 		if state, ok := m.entries[candidate.configLogin]; ok && state.ChannelID == candidate.channelID {
-			state.LastWatchAt = m.now()
 			state.Watched += time.Minute
 			if candidate.reason == WatchReasonStreak && state.WatchStreakMissing {
 				state.WatchStreakWatched += time.Minute
@@ -475,7 +463,6 @@ func (m *Manager) updateWatchReasonsLocked(candidates []watchCandidate) []Status
 
 func (m *Manager) markOnlineConfirmedLocked(state *streamerState, now time.Time, watchStreak *int) {
 	state.Live = true
-	state.PendingStreamUpAt = time.Time{}
 	if watchStreak != nil {
 		state.WatchStreak = cloneInt(watchStreak)
 	}
@@ -487,7 +474,6 @@ func (m *Manager) markOnlineConfirmedLocked(state *streamerState, now time.Time,
 	state.WatchStreakWatched = 0
 	state.SpadeURL = ""
 	state.Metadata = nil
-	state.CurrentBroadcastID = ""
 }
 
 func (m *Manager) markOfflineLocked(state *streamerState, now time.Time) {
@@ -497,8 +483,6 @@ func (m *Manager) markOfflineLocked(state *streamerState, now time.Time) {
 	state.Metadata = nil
 	state.Watched = 0
 	state.CurrentWatchReason = ""
-	state.PendingStreamUpAt = time.Time{}
-	state.CurrentBroadcastID = ""
 }
 
 func (m *Manager) emitStatusForConfig(configLogin string) {
@@ -534,12 +518,11 @@ func (m *Manager) emitStatuses(statuses []StatusEntry) {
 
 func statusFromState(state streamerState) StatusEntry {
 	return StatusEntry{
-		Login:              state.Login,
-		Watching:           state.Live && state.CurrentWatchReason != "",
-		Reason:             state.CurrentWatchReason,
-		WatchedMinutes:     int(state.Watched / time.Minute),
-		WatchStreakMinutes: int(state.WatchStreakWatched / time.Minute),
-		WatchStreak:        cloneInt(state.WatchStreak),
+		Login:          state.Login,
+		Watching:       state.Live && state.CurrentWatchReason != "",
+		Reason:         state.CurrentWatchReason,
+		WatchedMinutes: int(state.Watched / time.Minute),
+		WatchStreak:    cloneInt(state.WatchStreak),
 	}
 }
 
@@ -583,12 +566,6 @@ func (m *Manager) handlePubSubEvent(event Event) {
 				m.logf(state.Login, "claim failed: %v", err)
 			}
 		}
-	case "stream-up":
-		m.mu.Lock()
-		if current, ok := m.entries[configLogin]; ok {
-			current.PendingStreamUpAt = m.now()
-		}
-		m.mu.Unlock()
 	case "stream-down":
 		var statuses []StatusEntry
 		m.mu.Lock()

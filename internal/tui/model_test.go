@@ -8,6 +8,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"parasocial/internal/auth"
+	"parasocial/internal/irc"
+	"parasocial/internal/miner"
 	"parasocial/internal/twitch"
 )
 
@@ -59,7 +61,7 @@ func TestAuthUpdateAppendsLogLine(t *testing.T) {
 
 func TestAuthSuccessSwitchesToStreamerViewAndStartsResolution(t *testing.T) {
 	runtime := &fakeModelRuntime{}
-	state := &auth.State{Login: "viewer", UserID: "7"}
+	state := &auth.State{Login: "viewer"}
 	updated, cmd := New(Options{Streamers: []string{"alpha"}, runtime: runtime}).Update(AuthUpdate{State: state, Done: true})
 	if cmd == nil {
 		t.Fatal("expected streamer resolution command")
@@ -87,7 +89,7 @@ func TestInitStartsAuthOrResolution(t *testing.T) {
 		t.Fatal("expected auth runtime to start")
 	}
 
-	state := &auth.State{Login: "viewer", UserID: "7"}
+	state := &auth.State{Login: "viewer"}
 	runtime = &fakeModelRuntime{}
 	if _, ok := New(Options{Streamers: []string{"alpha"}, AuthState: state, runtime: runtime}).Init()().(streamerStartedMsg); !ok {
 		t.Fatal("authenticated Init() did not start streamer resolution")
@@ -177,13 +179,11 @@ func TestInfoTabShowsWatchStreakMinerStatus(t *testing.T) {
 		Status:      twitch.StreamerReady,
 		WatchStreak: &streak,
 	})
-	updated, _ := model.Update(StreamerUpdate{Miner: &MinerUpdate{
-		Login: "alpha_live",
-		Status: &MinerStatus{
-			Watching:       true,
-			Reason:         "watchstreak",
-			WatchedMinutes: 4,
-		},
+	updated, _ := model.Update(StreamerUpdate{MinerStatus: &miner.StatusEntry{
+		Login:          "alpha_live",
+		Watching:       true,
+		Reason:         miner.WatchReasonStreak,
+		WatchedMinutes: 4,
 	}})
 	next := updated.(Model)
 	entry, ok := next.selectedEntry()
@@ -206,14 +206,12 @@ func TestInfoTabShowsPointsMinerStatus(t *testing.T) {
 		Status:      twitch.StreamerReady,
 		WatchStreak: &streak,
 	})
-	updated, _ := model.Update(StreamerUpdate{Miner: &MinerUpdate{
-		Login: "alpha_live",
-		Status: &MinerStatus{
-			Watching:       true,
-			Reason:         "points",
-			WatchedMinutes: 6,
-			WatchStreak:    &minerStreak,
-		},
+	updated, _ := model.Update(StreamerUpdate{MinerStatus: &miner.StatusEntry{
+		Login:          "alpha_live",
+		Watching:       true,
+		Reason:         miner.WatchReasonPoints,
+		WatchedMinutes: 6,
+		WatchStreak:    &minerStreak,
 	}})
 	next := updated.(Model)
 	entry, ok := next.selectedEntry()
@@ -233,12 +231,10 @@ func TestInfoTabOmitsMinerStatusWhenInactiveOrUnwatched(t *testing.T) {
 		Status:      twitch.StreamerReady,
 		WatchStreak: &streak,
 	})
-	updated, _ := model.Update(StreamerUpdate{Miner: &MinerUpdate{
-		Login: "alpha_live",
-		Status: &MinerStatus{
-			Watching: true,
-			Reason:   "points",
-		},
+	updated, _ := model.Update(StreamerUpdate{MinerStatus: &miner.StatusEntry{
+		Login:    "alpha_live",
+		Watching: true,
+		Reason:   miner.WatchReasonPoints,
 	}})
 	next := updated.(Model)
 	entry, ok := next.selectedEntry()
@@ -427,16 +423,16 @@ func TestIRCUpdatesShowJoinedStatusAndFormattedMessages(t *testing.T) {
 		Login:       "alpha_live",
 		Live:        true,
 		Status:      twitch.StreamerReady,
-	}).Update(StreamerUpdate{IRC: &IRCUpdate{Login: "alpha_live", State: IRCJoined}})
+	}).Update(StreamerUpdate{IRC: &irc.Event{Streamer: "alpha_live", State: irc.StateJoined}})
 	next := updated.(Model)
 
 	if !next.ircDetails["alpha_live"].joined {
 		t.Fatal("expected joined detail")
 	}
 
-	updated, _ = next.Update(StreamerUpdate{IRC: &IRCUpdate{
-		Login: "alpha_live",
-		Line:  ":someone!someone@someone.tmi.twitch.tv PRIVMSG #alpha_live :hello there",
+	updated, _ = next.Update(StreamerUpdate{IRC: &irc.Event{
+		Streamer: "alpha_live",
+		Line:     ":someone!someone@someone.tmi.twitch.tv PRIVMSG #alpha_live :hello there",
 	}})
 	next = updated.(Model)
 	next.focus = focusIRC
@@ -482,11 +478,11 @@ func TestIRCUpdatesKeepOnlyLast50ChatMessages(t *testing.T) {
 		Status:      twitch.StreamerReady,
 	})
 
-	updated, _ := model.Update(StreamerUpdate{IRC: &IRCUpdate{Login: "alpha_live", State: IRCJoined}})
+	updated, _ := model.Update(StreamerUpdate{IRC: &irc.Event{Streamer: "alpha_live", State: irc.StateJoined}})
 	next := updated.(Model)
 	for i := 1; i <= maxIRCMessageHistory+5; i++ {
 		line := fmt.Sprintf(":user%d!user%d@user%d.tmi.twitch.tv PRIVMSG #alpha_live :message %d", i, i, i, i)
-		updated, _ = next.Update(StreamerUpdate{IRC: &IRCUpdate{Login: "alpha_live", Line: line}})
+		updated, _ = next.Update(StreamerUpdate{IRC: &irc.Event{Streamer: "alpha_live", Line: line}})
 		next = updated.(Model)
 	}
 
@@ -512,7 +508,7 @@ func TestMinerUpdatesRenderAndKeepOnlyLast50Messages(t *testing.T) {
 
 	next := model
 	for i := 1; i <= maxIRCMessageHistory+5; i++ {
-		updated, _ := next.Update(StreamerUpdate{Miner: &MinerUpdate{
+		updated, _ := next.Update(StreamerUpdate{MinerLog: &miner.LogEntry{
 			Login: "alpha_live",
 			Line:  fmt.Sprintf("miner message %d", i),
 		}})
@@ -541,7 +537,7 @@ func TestMinerTabShowsHistoryForOfflineStreamer(t *testing.T) {
 		Status:      twitch.StreamerReady,
 	})
 
-	updated, _ := model.Update(StreamerUpdate{Miner: &MinerUpdate{
+	updated, _ := model.Update(StreamerUpdate{MinerLog: &miner.LogEntry{
 		Login: "alpha_live",
 		Line:  "pubsub stream down",
 	}})
@@ -560,9 +556,9 @@ func TestIRCUpdatesIgnoreNonChatProtocolLines(t *testing.T) {
 		Status:      twitch.StreamerReady,
 	})
 
-	updated, _ := model.Update(StreamerUpdate{IRC: &IRCUpdate{
-		Login: "alpha_live",
-		Line:  "Joined #alpha_live as viewer",
+	updated, _ := model.Update(StreamerUpdate{IRC: &irc.Event{
+		Streamer: "alpha_live",
+		Line:     "Joined #alpha_live as viewer",
 	}})
 	next := updated.(Model)
 	if len(next.ircDetails["alpha_live"].messages) != 0 {
@@ -588,9 +584,9 @@ func TestIRCViewportAutoScrollsAtBottom(t *testing.T) {
 		t.Fatal("expected viewport to start at bottom")
 	}
 
-	updated, _ := model.Update(StreamerUpdate{IRC: &IRCUpdate{
-		Login: "alpha_live",
-		Line:  ":late!late@late.tmi.twitch.tv PRIVMSG #alpha_live :newest",
+	updated, _ := model.Update(StreamerUpdate{IRC: &irc.Event{
+		Streamer: "alpha_live",
+		Line:     ":late!late@late.tmi.twitch.tv PRIVMSG #alpha_live :newest",
 	}})
 	next := updated.(Model)
 	if !next.ircViewport.AtBottom() {
@@ -613,9 +609,9 @@ func TestIRCViewportPreservesManualScrollPosition(t *testing.T) {
 	model.syncIRCViewport(true)
 	model.ircViewport.GotoTop()
 
-	updated, _ := model.Update(StreamerUpdate{IRC: &IRCUpdate{
-		Login: "alpha_live",
-		Line:  ":late!late@late.tmi.twitch.tv PRIVMSG #alpha_live :newest",
+	updated, _ := model.Update(StreamerUpdate{IRC: &irc.Event{
+		Streamer: "alpha_live",
+		Line:     ":late!late@late.tmi.twitch.tv PRIVMSG #alpha_live :newest",
 	}})
 	next := updated.(Model)
 	if next.ircViewport.YOffset != 0 {
@@ -641,7 +637,7 @@ func TestMinerViewportAutoScrollsAtBottom(t *testing.T) {
 		t.Fatal("expected miner viewport to start at bottom")
 	}
 
-	updated, _ := model.Update(StreamerUpdate{Miner: &MinerUpdate{
+	updated, _ := model.Update(StreamerUpdate{MinerLog: &miner.LogEntry{
 		Login: "alpha_live",
 		Line:  "newest miner event",
 	}})
@@ -663,7 +659,7 @@ func TestMinerViewportPreservesManualScrollPosition(t *testing.T) {
 	model.syncMinerViewport(true)
 	model.minerViewport.GotoTop()
 
-	updated, _ := model.Update(StreamerUpdate{Miner: &MinerUpdate{
+	updated, _ := model.Update(StreamerUpdate{MinerLog: &miner.LogEntry{
 		Login: "alpha_live",
 		Line:  "newest miner event",
 	}})
