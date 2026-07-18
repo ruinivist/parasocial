@@ -49,3 +49,19 @@ func TestParseFrameVideoPlaybackFallsBackToTopicSuffix(t *testing.T) {
 		t.Fatalf("event = %#v", frame.Event)
 	}
 }
+
+func BenchmarkParseFramePointsEarned(b *testing.B) {
+	msg := []byte(`{"type":"MESSAGE","data":{"topic":"community-points-user-v1.viewer","message":"{\"type\":\"points-earned\",\"data\":{\"timestamp\":\"2026-04-29T12:00:00Z\",\"balance\":{\"balance\":42,\"channel_id\":\"123\"}}}"}}`)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = parseFrame(msg)
+	}
+}
+
+func BenchmarkParseFrameClaimAvailable(b *testing.B) {
+	msg := []byte(`{"type":"MESSAGE","data":{"topic":"community-points-user-v1.viewer","message":"{\"type\":\"claim-available\",\"data\":{\"timestamp\":\"2026-04-29T12:00:00Z\",\"claim\":{\"id\":\"claim-1\",\"channel_id\":\"123\"}}}"}}`)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = parseFrame(msg)
+	}
+}
